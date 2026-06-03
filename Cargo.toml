@@ -1,0 +1,6 @@
+[workspace]
+members = [
+"dkvac_core"
+]
+
+resolver = "2"
