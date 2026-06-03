@@ -1,0 +1,37 @@
+target/
+Cargo.lock
+
+# macOS
+
+.DS_Store
+
+# IDEs
+
+.vscode/
+.idea/
+
+# Rust analyzer
+
+*.rs.bk
+
+# Coverage
+
+coverage/
+tarpaulin-report.html
+
+# Temporary
+
+tmp/
+temp/
+
+# Logs
+
+*.log
+
+# Environment
+
+.env
+
+
+docs/
+prompts/
