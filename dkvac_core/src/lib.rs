@@ -1,14 +1,7 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+pub mod error;
+pub mod group;
+pub mod proof;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use error::DkvacError;
+pub use group::{Point, Scalar, derive_h, generator, is_identity, random_scalar};
+pub use proof::{DummyProof, DummyProofSystem, ProofStatement, ProofSystem};
