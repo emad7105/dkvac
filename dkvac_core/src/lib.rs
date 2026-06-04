@@ -1,6 +1,7 @@
 pub mod error;
 pub mod group;
 pub mod instantiation1;
+pub mod instantiation2;
 pub mod proof;
 
 pub use error::DkvacError;
