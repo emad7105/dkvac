@@ -286,7 +286,9 @@ pub fn delegate<R: CryptoRng + RngCore>(
     next_message: &Message,
 ) -> Result<(EncDel, Scalar), DkvacError> {
     validate_message(pp, next_message)?;
-    let current = validate_encdel(pp, encdel)?;
+    // let current = validate_encdel(pp, encdel)?;
+    let mut steps = encdel.steps.iter();
+    let current = steps.last().ok_or(DkvacError::InvalidDelegation)?;
     if !is_valid_delegation(&current.message, next_message) {
         return Err(DkvacError::InvalidDelegation);
     }

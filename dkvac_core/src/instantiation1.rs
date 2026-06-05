@@ -215,7 +215,7 @@ pub fn delegate<R: CryptoRng + RngCore>(
     delegated_attributes: &[Scalar],
 ) -> Result<(EncDel, Scalar), DkvacError> {
     let current = encdel.steps.last().ok_or(DkvacError::InvalidDelegation)?;
-    validate_step(current)?;
+    // validate_step(current)?;
 
     let delegated_set = collect_attribute_set(delegated_attributes)?;
     if delegated_set.is_empty() {
