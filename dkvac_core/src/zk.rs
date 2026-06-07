@@ -169,6 +169,33 @@ pub struct VectorIssueProofPlaceholder {
     pub warning: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct VectorIssueOption3Statement {
+    pub g: Point,
+    pub x_g: Point,
+    pub y_i_g: Vec<Point>,
+    pub v_g: Point,
+    pub c: Point,
+    pub attributes: Vec<Scalar>,
+    pub y_power_points: Vec<Point>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct VectorIssueOption3Witness {
+    pub x: Scalar,
+    pub v: Scalar,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VectorIssueOption3Proof {
+    pub a_x: Point,
+    pub a_v: Point,
+    pub a_c: Point,
+    pub a_y_power_points: Vec<Point>,
+    pub z_x: Scalar,
+    pub z_v: Scalar,
+}
+
 impl SubsetDelegateProof {
     pub fn prove<R: CryptoRng + RngCore>(
         rng: &mut R,
@@ -601,6 +628,104 @@ impl VectorIssueProofPlaceholder {
     }
 }
 
+impl VectorIssueOption3Proof {
+    pub fn prove<R: CryptoRng + RngCore>(
+        rng: &mut R,
+        statement: &VectorIssueOption3Statement,
+        witness: &VectorIssueOption3Witness,
+    ) -> Self {
+        assert_eq!(statement.attributes.len(), statement.y_i_g.len());
+        assert_eq!(statement.attributes.len(), statement.y_power_points.len());
+
+        let rho_x = random_scalar(rng);
+        let rho_v = random_scalar(rng);
+        let a_x = rho_x * statement.g;
+        let a_v = rho_v * statement.g;
+        let a_c = rho_x * statement.v_g
+            + statement
+                .attributes
+                .iter()
+                .enumerate()
+                .fold(Point::default(), |acc, (idx, attribute)| {
+                    acc + *attribute * (rho_v * statement.y_i_g[idx])
+                });
+        let a_y_power_points = statement
+            .y_i_g
+            .iter()
+            .map(|y_i| rho_v * *y_i)
+            .collect::<Vec<_>>();
+
+        let mut transcript = Transcript::new(b"dkvac-vector-issue-option3-v1");
+        append_vector_issue_option3_statement(&mut transcript, statement);
+        append_vector_issue_option3_commitments(
+            &mut transcript,
+            &a_x,
+            &a_v,
+            &a_c,
+            &a_y_power_points,
+        );
+        let c = transcript_challenge_scalar(&mut transcript, b"c");
+
+        Self {
+            a_x,
+            a_v,
+            a_c,
+            a_y_power_points,
+            z_x: rho_x + c * witness.x,
+            z_v: rho_v + c * witness.v,
+        }
+    }
+
+    pub fn verify(&self, statement: &VectorIssueOption3Statement) -> bool {
+        if statement.attributes.len() != statement.y_i_g.len()
+            || statement.attributes.len() != statement.y_power_points.len()
+            || statement.attributes.len() != self.a_y_power_points.len()
+        {
+            return false;
+        }
+
+        let mut transcript = Transcript::new(b"dkvac-vector-issue-option3-v1");
+        append_vector_issue_option3_statement(&mut transcript, statement);
+        append_vector_issue_option3_commitments(
+            &mut transcript,
+            &self.a_x,
+            &self.a_v,
+            &self.a_c,
+            &self.a_y_power_points,
+        );
+        let c = transcript_challenge_scalar(&mut transcript, b"c");
+
+        if self.z_x * statement.g != self.a_x + c * statement.x_g {
+            return false;
+        }
+        if self.z_v * statement.g != self.a_v + c * statement.v_g {
+            return false;
+        }
+
+        let lhs_c = self.z_x * statement.v_g
+            + statement
+                .attributes
+                .iter()
+                .enumerate()
+                .fold(Point::default(), |acc, (idx, attribute)| {
+                    acc + *attribute * (self.z_v * statement.y_i_g[idx])
+                });
+        if lhs_c != self.a_c + c * statement.c {
+            return false;
+        }
+
+        for idx in 0..statement.y_i_g.len() {
+            if self.z_v * statement.y_i_g[idx]
+                != self.a_y_power_points[idx] + c * statement.y_power_points[idx]
+            {
+                return false;
+            }
+        }
+
+        true
+    }
+}
+
 fn append_subset_delegate_statement(
     transcript: &mut Transcript,
     statement: &SubsetDelegateStatement,
@@ -717,6 +842,44 @@ fn append_vector_presentation_statement(
     for (idx, point) in &statement.q_hidden {
         transcript_append_usize(transcript, b"q_idx", *idx);
         transcript_append_point(transcript, b"q_point", point);
+    }
+}
+
+fn append_vector_issue_option3_statement(
+    transcript: &mut Transcript,
+    statement: &VectorIssueOption3Statement,
+) {
+    transcript_append_point(transcript, b"g", &statement.g);
+    transcript_append_point(transcript, b"x_g", &statement.x_g);
+    transcript_append_point(transcript, b"v_g", &statement.v_g);
+    transcript_append_point(transcript, b"c", &statement.c);
+    for (idx, y_i_g) in statement.y_i_g.iter().enumerate() {
+        transcript_append_usize(transcript, b"y_i_idx", idx);
+        transcript_append_point(transcript, b"y_i_point", y_i_g);
+    }
+    for (idx, attribute) in statement.attributes.iter().enumerate() {
+        transcript_append_usize(transcript, b"attribute_idx", idx);
+        transcript_append_scalar(transcript, b"attribute_value", attribute);
+    }
+    for (idx, point) in statement.y_power_points.iter().enumerate() {
+        transcript_append_usize(transcript, b"m_i_idx", idx);
+        transcript_append_point(transcript, b"m_i_point", point);
+    }
+}
+
+fn append_vector_issue_option3_commitments(
+    transcript: &mut Transcript,
+    a_x: &Point,
+    a_v: &Point,
+    a_c: &Point,
+    a_y_power_points: &[Point],
+) {
+    transcript_append_point(transcript, b"a_x", a_x);
+    transcript_append_point(transcript, b"a_v", a_v);
+    transcript_append_point(transcript, b"a_c", a_c);
+    for (idx, point) in a_y_power_points.iter().enumerate() {
+        transcript_append_usize(transcript, b"a_m_i_idx", idx);
+        transcript_append_point(transcript, b"a_m_i_point", point);
     }
 }
 
@@ -1093,6 +1256,92 @@ mod tests {
         let proof = VectorPresentationProof::prove(&mut rng, &statement, &witness);
         let mut bad_statement = statement.clone();
         bad_statement.q_hidden.remove(&1);
+        assert!(!proof.verify(&bad_statement));
+    }
+
+    fn vector_issue_option3_fixture() -> (
+        VectorIssueOption3Statement,
+        VectorIssueOption3Witness,
+    ) {
+        let g = generator();
+        let x = scalar(5);
+        let v = scalar(7);
+        let x_g = x * g;
+        let v_g = v * g;
+        let y_i_g = vec![point(11), point(13), point(17)];
+        let attributes = vec![scalar(2), scalar(3), scalar(5)];
+        let y_power_points = y_i_g.iter().map(|y_i| v * *y_i).collect::<Vec<_>>();
+        let c = x * v_g
+            + attributes
+                .iter()
+                .enumerate()
+                .fold(Point::default(), |acc, (idx, attribute)| {
+                    acc + *attribute * y_power_points[idx]
+                });
+
+        (
+            VectorIssueOption3Statement {
+                g,
+                x_g,
+                y_i_g,
+                v_g,
+                c,
+                attributes,
+                y_power_points,
+            },
+            VectorIssueOption3Witness { x, v },
+        )
+    }
+
+    #[test]
+    fn valid_vector_issue_option3_proof_accepts() {
+        let mut rng = ChaCha20Rng::from_seed([9u8; 32]);
+        let (statement, witness) = vector_issue_option3_fixture();
+        let proof = VectorIssueOption3Proof::prove(&mut rng, &statement, &witness);
+        assert!(proof.verify(&statement));
+    }
+
+    #[test]
+    fn modified_c_rejects() {
+        let mut rng = ChaCha20Rng::from_seed([9u8; 32]);
+        let (statement, witness) = vector_issue_option3_fixture();
+        let proof = VectorIssueOption3Proof::prove(&mut rng, &statement, &witness);
+        let bad_statement = VectorIssueOption3Statement {
+            c: statement.c + point(1),
+            ..statement
+        };
+        assert!(!proof.verify(&bad_statement));
+    }
+
+    #[test]
+    fn modified_v_g_rejects() {
+        let mut rng = ChaCha20Rng::from_seed([9u8; 32]);
+        let (statement, witness) = vector_issue_option3_fixture();
+        let proof = VectorIssueOption3Proof::prove(&mut rng, &statement, &witness);
+        let bad_statement = VectorIssueOption3Statement {
+            v_g: statement.v_g + point(1),
+            ..statement
+        };
+        assert!(!proof.verify(&bad_statement));
+    }
+
+    #[test]
+    fn modified_y_power_points_0_rejects() {
+        let mut rng = ChaCha20Rng::from_seed([9u8; 32]);
+        let (statement, witness) = vector_issue_option3_fixture();
+        let proof = VectorIssueOption3Proof::prove(&mut rng, &statement, &witness);
+        let mut bad_statement = statement.clone();
+        bad_statement.y_power_points[0] += point(1);
+        assert!(!proof.verify(&bad_statement));
+    }
+
+    #[test]
+    fn modified_attribute_rejects() {
+        let mut rng = ChaCha20Rng::from_seed([9u8; 32]);
+        let (statement, witness) = vector_issue_option3_fixture();
+        let proof = VectorIssueOption3Proof::prove(&mut rng, &statement, &witness);
+        let mut bad_statement = statement.clone();
+        bad_statement.attributes[1] += scalar(1);
         assert!(!proof.verify(&bad_statement));
     }
 
