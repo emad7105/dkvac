@@ -337,25 +337,25 @@ fn ensure_components_present(
     Ok(())
 }
 
-fn validate_step(step: &DelegationStep) -> Result<(), DkvacError> {
-    if !DummyProofSystem::verify(ProofStatement::Inst1Delegate, &step.proof)
-        && !DummyProofSystem::verify(ProofStatement::Inst1Issue, &step.proof)
-    {
-        return Err(DkvacError::InvalidProof);
-    }
-    if step.attributes.is_empty() {
-        return Err(DkvacError::InvalidDelegation);
-    }
-    if step.attributes.len() != step.ec.components.len() {
-        return Err(DkvacError::InvalidDelegation);
-    }
-    for key in &step.attributes {
-        if !step.ec.components.contains_key(key) {
-            return Err(DkvacError::InvalidDelegation);
-        }
-    }
-    Ok(())
-}
+// fn validate_step(step: &DelegationStep) -> Result<(), DkvacError> {
+//     if !DummyProofSystem::verify(ProofStatement::Inst1Delegate, &step.proof)
+//         && !DummyProofSystem::verify(ProofStatement::Inst1Issue, &step.proof)
+//     {
+//         return Err(DkvacError::InvalidProof);
+//     }
+//     if step.attributes.is_empty() {
+//         return Err(DkvacError::InvalidDelegation);
+//     }
+//     if step.attributes.len() != step.ec.components.len() {
+//         return Err(DkvacError::InvalidDelegation);
+//     }
+//     for key in &step.attributes {
+//         if !step.ec.components.contains_key(key) {
+//             return Err(DkvacError::InvalidDelegation);
+//         }
+//     }
+//     Ok(())
+// }
 
 fn validate_encdel(encdel: &EncDel) -> Result<&DelegationStep, DkvacError> {
     let mut steps = encdel.steps.iter();

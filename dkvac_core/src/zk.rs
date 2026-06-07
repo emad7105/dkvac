@@ -76,6 +76,31 @@ pub struct VectorDelegateProof {
     pub z_mu: Scalar,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct VectorPresentationStatement {
+    pub r_h: Point,
+    pub y_i_points: BTreeMap<usize, Point>,
+    pub v_prime: Point,
+    pub p: Point,
+    pub q_hidden: BTreeMap<usize, Point>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct VectorPresentationWitness {
+    pub mu_prime: Scalar,
+    pub hidden_attributes: BTreeMap<usize, Scalar>,
+    pub beta: BTreeMap<usize, Scalar>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct VectorPresentationProof {
+    pub a_p: Point,
+    pub a_q: BTreeMap<usize, Point>,
+    pub z_mu_prime: Scalar,
+    pub z_beta: BTreeMap<usize, Scalar>,
+    pub z_s: BTreeMap<usize, Scalar>,
+}
+
 impl SubsetDelegateProof {
     pub fn prove<R: CryptoRng + RngCore>(
         rng: &mut R,
@@ -196,6 +221,115 @@ impl VectorDelegateProof {
     }
 }
 
+impl VectorPresentationProof {
+    pub fn prove<R: CryptoRng + RngCore>(
+        rng: &mut R,
+        statement: &VectorPresentationStatement,
+        witness: &VectorPresentationWitness,
+    ) -> Self {
+        let indices = statement.q_hidden.keys().copied().collect::<Vec<_>>();
+        assert!(matching_hidden_index_sets(
+            &statement.y_i_points,
+            &statement.q_hidden,
+            &witness.hidden_attributes,
+            &witness.beta,
+        ));
+
+        let rho_mu_prime = random_scalar(rng);
+        let mut rho_beta = BTreeMap::new();
+        let mut rho_s = BTreeMap::new();
+
+        for idx in &indices {
+            rho_beta.insert(*idx, random_scalar(rng));
+            rho_s.insert(*idx, random_scalar(rng));
+        }
+
+        let a_p = indices.iter().fold(-(rho_mu_prime * statement.r_h), |acc, idx| {
+            acc + rho_beta[idx] * statement.y_i_points[idx]
+        });
+        let a_q = indices
+            .iter()
+            .map(|idx| {
+                (
+                    *idx,
+                    rho_s[idx] * statement.v_prime + rho_beta[idx] * crate::group::generator(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        let mut transcript = Transcript::new(b"dkvac-vector-presentation-v1");
+        append_vector_presentation_statement(&mut transcript, statement);
+        transcript_append_point(&mut transcript, b"a_p", &a_p);
+        for (idx, point) in &a_q {
+            transcript_append_usize(&mut transcript, b"a_q_idx", *idx);
+            transcript_append_point(&mut transcript, b"a_q_point", point);
+        }
+        let c = transcript_challenge_scalar(&mut transcript, b"c");
+
+        let z_beta = indices
+            .iter()
+            .map(|idx| (*idx, rho_beta[idx] + c * witness.beta[idx]))
+            .collect::<BTreeMap<_, _>>();
+        let z_s = indices
+            .iter()
+            .map(|idx| (*idx, rho_s[idx] + c * witness.hidden_attributes[idx]))
+            .collect::<BTreeMap<_, _>>();
+
+        Self {
+            a_p,
+            a_q,
+            z_mu_prime: rho_mu_prime + c * witness.mu_prime,
+            z_beta,
+            z_s,
+        }
+    }
+
+    pub fn verify(&self, statement: &VectorPresentationStatement) -> bool {
+        if !matching_hidden_index_sets(
+            &statement.y_i_points,
+            &statement.q_hidden,
+            &self.z_beta,
+            &self.z_s,
+        ) {
+            return false;
+        }
+        if self.a_q.keys().copied().collect::<Vec<_>>()
+            != statement.q_hidden.keys().copied().collect::<Vec<_>>()
+        {
+            return false;
+        }
+
+        let indices = statement.q_hidden.keys().copied().collect::<Vec<_>>();
+        let mut transcript = Transcript::new(b"dkvac-vector-presentation-v1");
+        append_vector_presentation_statement(&mut transcript, statement);
+        transcript_append_point(&mut transcript, b"a_p", &self.a_p);
+        for (idx, point) in &self.a_q {
+            transcript_append_usize(&mut transcript, b"a_q_idx", *idx);
+            transcript_append_point(&mut transcript, b"a_q_point", point);
+        }
+        let c = transcript_challenge_scalar(&mut transcript, b"c");
+
+        let lhs_p = indices.iter().fold(-(self.z_mu_prime * statement.r_h), |acc, idx| {
+            acc + self.z_beta[idx] * statement.y_i_points[idx]
+        });
+        let rhs_p = self.a_p + c * statement.p;
+        if lhs_p != rhs_p {
+            return false;
+        }
+
+        for idx in indices {
+            let lhs_q = self.z_s[&idx] * statement.v_prime
+                + self.z_beta[&idx] * crate::group::generator();
+            let rhs_q = self.a_q[&idx] + c * statement.q_hidden[&idx];
+            if lhs_q != rhs_q {
+                return false;
+            }
+        }
+
+        true
+    }
+}
+
 fn append_subset_delegate_statement(
     transcript: &mut Transcript,
     statement: &SubsetDelegateStatement,
@@ -226,6 +360,36 @@ fn append_vector_delegate_statement(
     transcript_append_point(transcript, b"new_ev", &statement.new_ev);
     transcript_append_point(transcript, b"new_ez", &statement.new_ez);
     transcript_append_point(transcript, b"new_c", &statement.new_c);
+}
+
+fn append_vector_presentation_statement(
+    transcript: &mut Transcript,
+    statement: &VectorPresentationStatement,
+) {
+    transcript_append_point(transcript, b"r_h", &statement.r_h);
+    for (idx, point) in &statement.y_i_points {
+        transcript_append_usize(transcript, b"y_idx", *idx);
+        transcript_append_point(transcript, b"y_point", point);
+    }
+    transcript_append_point(transcript, b"v_prime", &statement.v_prime);
+    transcript_append_point(transcript, b"p", &statement.p);
+    for (idx, point) in &statement.q_hidden {
+        transcript_append_usize(transcript, b"q_idx", *idx);
+        transcript_append_point(transcript, b"q_point", point);
+    }
+}
+
+fn matching_hidden_index_sets<T, U, V, W>(
+    y_i_points: &BTreeMap<usize, T>,
+    q_hidden: &BTreeMap<usize, U>,
+    hidden_attributes: &BTreeMap<usize, V>,
+    beta: &BTreeMap<usize, W>,
+) -> bool {
+    let y_keys = y_i_points.keys().copied().collect::<Vec<_>>();
+    let q_keys = q_hidden.keys().copied().collect::<Vec<_>>();
+    let s_keys = hidden_attributes.keys().copied().collect::<Vec<_>>();
+    let b_keys = beta.keys().copied().collect::<Vec<_>>();
+    y_keys == q_keys && q_keys == s_keys && s_keys == b_keys
 }
 
 #[cfg(test)]
@@ -358,5 +522,103 @@ mod tests {
         transcript_append_usize(&mut transcript, b"i", 7);
         let challenge = transcript_challenge_scalar(&mut transcript, b"c");
         assert_ne!(challenge, Scalar::ZERO);
+    }
+
+    fn vector_presentation_fixture() -> (
+        VectorPresentationStatement,
+        VectorPresentationWitness,
+    ) {
+        let r_h = point(5);
+        let v_prime = point(7);
+        let hidden_attributes = BTreeMap::from([(1usize, scalar(11)), (3usize, scalar(13))]);
+        let beta = BTreeMap::from([(1usize, scalar(17)), (3usize, scalar(19))]);
+        let y_i_points = BTreeMap::from([(1usize, point(23)), (3usize, point(29))]);
+        let q_hidden = hidden_attributes
+            .iter()
+            .map(|(idx, s_i)| (*idx, *s_i * v_prime + beta[idx] * generator()))
+            .collect::<BTreeMap<_, _>>();
+        let p = y_i_points
+            .iter()
+            .fold(-(scalar(31) * r_h), |acc, (idx, y_i)| acc + beta[idx] * *y_i);
+        (
+            VectorPresentationStatement {
+                r_h,
+                y_i_points,
+                v_prime,
+                p,
+                q_hidden,
+            },
+            VectorPresentationWitness {
+                mu_prime: scalar(31),
+                hidden_attributes,
+                beta,
+            },
+        )
+    }
+
+    #[test]
+    fn vector_presentation_proof_accepts_valid_statement() {
+        let mut rng = ChaCha20Rng::from_seed([9u8; 32]);
+        let (statement, witness) = vector_presentation_fixture();
+        let proof = VectorPresentationProof::prove(&mut rng, &statement, &witness);
+        assert!(proof.verify(&statement));
+    }
+
+    #[test]
+    fn vector_presentation_proof_rejects_wrong_hidden_attribute() {
+        let mut rng = ChaCha20Rng::from_seed([9u8; 32]);
+        let (statement, mut witness) = vector_presentation_fixture();
+        witness.hidden_attributes.insert(1, scalar(99));
+        let proof = VectorPresentationProof::prove(
+            &mut rng,
+            &vector_presentation_fixture().0,
+            &vector_presentation_fixture().1,
+        );
+        assert!(!proof.verify(&VectorPresentationStatement {
+            q_hidden: statement
+                .q_hidden
+                .iter()
+                .map(|(idx, point)| {
+                    if *idx == 1 {
+                        (*idx, witness.hidden_attributes[idx] * statement.v_prime + witness.beta[idx] * generator())
+                    } else {
+                        (*idx, *point)
+                    }
+                })
+                .collect(),
+            ..statement
+        }));
+    }
+
+    #[test]
+    fn vector_presentation_proof_rejects_modified_q() {
+        let mut rng = ChaCha20Rng::from_seed([9u8; 32]);
+        let (statement, witness) = vector_presentation_fixture();
+        let proof = VectorPresentationProof::prove(&mut rng, &statement, &witness);
+        let mut bad_statement = statement.clone();
+        bad_statement.q_hidden.insert(1, bad_statement.q_hidden[&1] + point(1));
+        assert!(!proof.verify(&bad_statement));
+    }
+
+    #[test]
+    fn vector_presentation_proof_rejects_modified_p() {
+        let mut rng = ChaCha20Rng::from_seed([9u8; 32]);
+        let (statement, witness) = vector_presentation_fixture();
+        let proof = VectorPresentationProof::prove(&mut rng, &statement, &witness);
+        let bad_statement = VectorPresentationStatement {
+            p: statement.p + point(1),
+            ..statement
+        };
+        assert!(!proof.verify(&bad_statement));
+    }
+
+    #[test]
+    fn vector_presentation_proof_rejects_missing_index() {
+        let mut rng = ChaCha20Rng::from_seed([9u8; 32]);
+        let (statement, witness) = vector_presentation_fixture();
+        let proof = VectorPresentationProof::prove(&mut rng, &statement, &witness);
+        let mut bad_statement = statement.clone();
+        bad_statement.q_hidden.remove(&1);
+        assert!(!proof.verify(&bad_statement));
     }
 }
