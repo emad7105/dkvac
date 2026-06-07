@@ -44,7 +44,7 @@ pub struct SubsetDelegateWitness {
     pub mu: Scalar,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubsetDelegateProof {
     pub a_e: Point,
     pub a_ev: Point,
@@ -68,7 +68,7 @@ pub struct VectorDelegateWitness {
     pub mu: Scalar,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VectorDelegateProof {
     pub a_ev: Point,
     pub a_ez: Point,
@@ -92,7 +92,7 @@ pub struct VectorPresentationWitness {
     pub beta: BTreeMap<usize, Scalar>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VectorPresentationProof {
     pub a_p: Point,
     pub a_q: BTreeMap<usize, Point>,

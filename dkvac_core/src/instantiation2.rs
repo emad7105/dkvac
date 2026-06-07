@@ -1,6 +1,7 @@
 use crate::error::DkvacError;
 use crate::group::{Point, Scalar, derive_h, generator, is_identity, random_scalar};
 use crate::proof::{DummyProof, DummyProofSystem, ProofStatement, ProofSystem};
+use crate::zk::{VectorDelegateProof, VectorDelegateStatement, VectorDelegateWitness};
 use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -56,7 +57,7 @@ pub struct DelegationStep {
     pub ec: EncryptedCredential,
     pub malleable_keys: BTreeMap<usize, Point>,
     pub message: Message,
-    pub proof: DummyProof,
+    pub proof: Inst2DelegationProof,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,6 +77,12 @@ pub struct Show {
     pub q_hidden: BTreeMap<usize, Point>,
     pub disclosed: BTreeMap<usize, Scalar>,
     pub proof: DummyProof,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Inst2DelegationProof {
+    Issue(DummyProof),
+    Delegate(VectorDelegateProof),
 }
 
 pub fn setup<R: CryptoRng + RngCore>(rng: &mut R, max_attributes: usize) -> PublicParams {
@@ -272,7 +279,7 @@ pub fn issue_del<R: CryptoRng + RngCore>(
         },
         malleable_keys: compute_malleable_keys(&isk.y, &message.malleable_indices, &v_g)?,
         message: message.clone(),
-        proof: DummyProofSystem::prove(ProofStatement::Inst2Issue),
+        proof: Inst2DelegationProof::Issue(DummyProofSystem::prove(ProofStatement::Inst2Issue)),
     };
 
     Ok((EncDel { steps: vec![step] }, z))
@@ -322,15 +329,28 @@ pub fn delegate<R: CryptoRng + RngCore>(
         })
         .collect::<Result<BTreeMap<_, _>, DkvacError>>()?;
 
+    let new_ec = EncryptedCredential {
+        ev: mu * current.ec.ev,
+        ez: mu * current.ec.ez,
+        c: mu * (current.ec.c + adjustment),
+    };
+    let statement = VectorDelegateStatement {
+        old_ev: current.ec.ev,
+        old_ez: current.ec.ez,
+        old_c_adjusted: current.ec.c + adjustment,
+        new_ev: new_ec.ev,
+        new_ez: new_ec.ez,
+        new_c: new_ec.c,
+    };
     let next_step = DelegationStep {
-        ec: EncryptedCredential {
-            ev: mu * current.ec.ev,
-            ez: mu * current.ec.ez,
-            c: mu * (current.ec.c + adjustment),
-        },
+        ec: new_ec,
         malleable_keys,
         message: next_message.clone(),
-        proof: DummyProofSystem::prove(ProofStatement::Inst2Delegate),
+        proof: Inst2DelegationProof::Delegate(VectorDelegateProof::prove(
+            rng,
+            &statement,
+            &VectorDelegateWitness { mu },
+        )),
     };
 
     let mut steps = encdel.steps.clone();
@@ -451,20 +471,45 @@ fn validate_encdel<'a>(
     let mut steps = encdel.steps.iter();
     let first = steps.next().ok_or(DkvacError::InvalidDelegation)?;
     validate_message(pp, &first.message)?;
-    if !DummyProofSystem::verify(ProofStatement::Inst2Issue, &first.proof) {
-        return Err(DkvacError::InvalidProof);
+    match &first.proof {
+        Inst2DelegationProof::Issue(proof)
+            if DummyProofSystem::verify(ProofStatement::Inst2Issue, proof) => {}
+        _ => return Err(DkvacError::InvalidProof),
     }
     validate_malleable_keys(&first.message, &first.malleable_keys)?;
 
     let mut previous = first;
     for step in steps {
         validate_message(pp, &step.message)?;
-        if !DummyProofSystem::verify(ProofStatement::Inst2Delegate, &step.proof) {
-            return Err(DkvacError::InvalidProof);
-        }
         validate_malleable_keys(&step.message, &step.malleable_keys)?;
         if !is_valid_delegation(&previous.message, &step.message) {
             return Err(DkvacError::InvalidDelegation);
+        }
+        let finalized_indices = previous
+            .message
+            .malleable_indices
+            .difference(&step.message.malleable_indices)
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let adjustment = finalized_indices.iter().try_fold(Point::default(), |acc, idx| {
+            let mk = previous
+                .malleable_keys
+                .get(idx)
+                .ok_or(DkvacError::InvalidDelegation)?;
+            let delta = step.message.attributes[*idx] - previous.message.attributes[*idx];
+            Ok(acc + delta * *mk)
+        })?;
+        let statement = VectorDelegateStatement {
+            old_ev: previous.ec.ev,
+            old_ez: previous.ec.ez,
+            old_c_adjusted: previous.ec.c + adjustment,
+            new_ev: step.ec.ev,
+            new_ez: step.ec.ez,
+            new_c: step.ec.c,
+        };
+        match &step.proof {
+            Inst2DelegationProof::Delegate(proof) if proof.verify(&statement) => {}
+            _ => return Err(DkvacError::InvalidProof),
         }
         previous = step;
     }
@@ -695,5 +740,35 @@ mod tests {
         let (_, pp, _, _) = fixture(4);
         let err = obtain_del(&pp, &EncDel { steps: vec![] }, &scalar(1)).expect_err("empty");
         assert!(matches!(err, DkvacError::InvalidDelegation));
+    }
+
+    #[test]
+    fn tamper_delegated_c_rejects() {
+        let (mut rng, pp, isk, ipar) = fixture(4);
+        let message = sample_message();
+        let next = Message {
+            attributes: vec![scalar(3), scalar(9), scalar(7), scalar(11)],
+            malleable_indices: BTreeSet::from([2]),
+        };
+        let (encdel, dk) = issue_del(&mut rng, &pp, &isk, &ipar, &message).expect("issue del");
+        let (mut encdel, dk) = delegate(&mut rng, &pp, &encdel, &dk, &next).expect("delegate");
+        encdel.steps.last_mut().expect("step").ec.c += generator();
+        let err = obtain_del(&pp, &encdel, &dk).expect_err("tamper");
+        assert!(matches!(err, DkvacError::InvalidProof));
+    }
+
+    #[test]
+    fn tamper_delegated_ev_rejects() {
+        let (mut rng, pp, isk, ipar) = fixture(4);
+        let message = sample_message();
+        let next = Message {
+            attributes: vec![scalar(3), scalar(9), scalar(7), scalar(11)],
+            malleable_indices: BTreeSet::from([2]),
+        };
+        let (encdel, dk) = issue_del(&mut rng, &pp, &isk, &ipar, &message).expect("issue del");
+        let (mut encdel, dk) = delegate(&mut rng, &pp, &encdel, &dk, &next).expect("delegate");
+        encdel.steps.last_mut().expect("step").ec.ev += generator();
+        let err = obtain_del(&pp, &encdel, &dk).expect_err("tamper");
+        assert!(matches!(err, DkvacError::InvalidProof));
     }
 }
