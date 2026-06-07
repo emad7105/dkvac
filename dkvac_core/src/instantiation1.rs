@@ -1,7 +1,10 @@
 use crate::error::DkvacError;
 use crate::group::{Point, Scalar, derive_h, generator, is_identity, random_scalar};
-use crate::proof::{DummyProof, DummyProofSystem, ProofStatement, ProofSystem};
-use crate::zk::{SubsetDelegateProof, SubsetDelegateStatement, SubsetDelegateWitness};
+use crate::zk::{
+    SubsetDelegatableIssueProof, SubsetDelegatableIssueStatement, SubsetDelegatableIssueWitness,
+    SubsetDelegateProof, SubsetDelegateStatement, SubsetDelegateWitness, SubsetDirectIssueProof,
+    SubsetDirectIssueStatement, SubsetDirectIssueWitness,
+};
 use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -32,6 +35,7 @@ pub struct IssuerPublicParams {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Credential {
     pub v_x_g: Point,
+    pub ev: Point,
     pub components: BTreeMap<ScalarBytes, Point>,
 }
 
@@ -64,7 +68,7 @@ pub struct Show {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Inst1DelegationProof {
-    Issue(DummyProof),
+    Issue(SubsetDelegatableIssueProof),
     Delegate(SubsetDelegateProof),
 }
 
@@ -103,7 +107,7 @@ pub fn issue_cred<R: CryptoRng + RngCore>(
     isk: &IssuerSecretKey,
     ipar: &IssuerPublicParams,
     attributes: &[Scalar],
-) -> Result<(Credential, DummyProof), DkvacError> {
+) -> Result<(Credential, SubsetDirectIssueProof), DkvacError> {
     let attribute_set = collect_attribute_set(attributes)?;
     validate_issue_attributes(isk, &attribute_set)?;
 
@@ -111,18 +115,45 @@ pub fn issue_cred<R: CryptoRng + RngCore>(
     let v_g = v * pp.g;
     let v_x_g = v * ipar.x_g;
     let components = compute_components(&attribute_set, isk, &v_g)?;
-    let cred = Credential { v_x_g, components };
-    let proof = DummyProofSystem::prove(ProofStatement::Inst1Issue);
+    let cred = Credential {
+        v_x_g,
+        ev: v_g,
+        components,
+    };
+    let proof = SubsetDirectIssueProof::prove(
+        rng,
+        &SubsetDirectIssueStatement {
+            g: pp.g,
+            x_g: ipar.x_g,
+            y_g: ipar.y_g,
+            v_x_g: cred.v_x_g,
+            ev: cred.ev,
+            components: cred.components.clone(),
+        },
+        &SubsetDirectIssueWitness {
+            x: isk.x,
+            y: isk.y,
+            v,
+        },
+    );
     Ok((cred, proof))
 }
 
 pub fn obtain_cred(
-    _ipar: &IssuerPublicParams,
+    ipar: &IssuerPublicParams,
     attributes: &[Scalar],
     cred: Credential,
-    proof: &DummyProof,
+    proof: &SubsetDirectIssueProof,
 ) -> Result<Credential, DkvacError> {
-    if !DummyProofSystem::verify(ProofStatement::Inst1Issue, proof) {
+    let statement = SubsetDirectIssueStatement {
+        g: generator(),
+        x_g: ipar.x_g,
+        y_g: ipar.y_g,
+        v_x_g: cred.v_x_g,
+        ev: cred.ev,
+        components: cred.components.clone(),
+    };
+    if !proof.verify(&statement) {
         return Err(DkvacError::InvalidProof);
     }
 
@@ -201,6 +232,7 @@ pub fn issue_del<R: CryptoRng + RngCore>(
     let ev = v_g;
     let ez = z * pp.g;
     let components = compute_components(&attribute_set, isk, &v_g)?;
+    let proof_components = components.clone();
     let step = DelegationStep {
         ec: EncryptedCredential {
             e,
@@ -209,7 +241,25 @@ pub fn issue_del<R: CryptoRng + RngCore>(
             components,
         },
         attributes: attribute_set,
-        proof: Inst1DelegationProof::Issue(DummyProofSystem::prove(ProofStatement::Inst1Issue)),
+        proof: Inst1DelegationProof::Issue(SubsetDelegatableIssueProof::prove(
+            rng,
+            &SubsetDelegatableIssueStatement {
+                g: pp.g,
+                h: pp.h,
+                x_g: ipar.x_g,
+                y_g: ipar.y_g,
+                e,
+                ev,
+                ez,
+                components: proof_components,
+            },
+            &SubsetDelegatableIssueWitness {
+                x: isk.x,
+                y: isk.y,
+                v,
+                z,
+            },
+        )),
     };
 
     Ok((EncDel { steps: vec![step] }, z))
@@ -286,14 +336,16 @@ pub fn delegate<R: CryptoRng + RngCore>(
 
 pub fn obtain_del(
     pp: &PublicParams,
+    ipar: &IssuerPublicParams,
     encdel: &EncDel,
     dk: &Scalar,
 ) -> Result<Credential, DkvacError> {
-    let final_step = validate_encdel(encdel)?;
+    let final_step = validate_encdel(pp, ipar, encdel)?;
     let v_x_g = final_step.ec.e - *dk * pp.h;
 
     Ok(Credential {
         v_x_g,
+        ev: final_step.ec.ev,
         components: final_step.ec.components.clone(),
     })
 }
@@ -367,12 +419,25 @@ fn ensure_components_present(
     Ok(())
 }
 
-fn validate_encdel(encdel: &EncDel) -> Result<&DelegationStep, DkvacError> {
+fn validate_encdel<'a>(
+    pp: &PublicParams,
+    ipar: &IssuerPublicParams,
+    encdel: &'a EncDel,
+) -> Result<&'a DelegationStep, DkvacError> {
     let mut steps = encdel.steps.iter();
     let first = steps.next().ok_or(DkvacError::InvalidDelegation)?;
     match &first.proof {
         Inst1DelegationProof::Issue(proof)
-            if DummyProofSystem::verify(ProofStatement::Inst1Issue, proof) => {}
+            if proof.verify(&SubsetDelegatableIssueStatement {
+                g: pp.g,
+                h: pp.h,
+                x_g: ipar.x_g,
+                y_g: ipar.y_g,
+                e: first.ec.e,
+                ev: first.ec.ev,
+                ez: first.ec.ez,
+                components: first.ec.components.clone(),
+            }) => {}
         _ => return Err(DkvacError::InvalidProof),
     }
     validate_step_structure(first)?;
@@ -429,6 +494,7 @@ fn key_to_scalar(key: &ScalarBytes) -> Result<Scalar, DkvacError> {
         .ok_or(DkvacError::InvalidAttributeSet)
 }
 
+
 fn has_duplicate_attributes<'a, I>(attributes: I) -> bool
 where
     I: IntoIterator<Item = &'a Scalar>,
@@ -481,6 +547,27 @@ mod tests {
     }
 
     #[test]
+    fn obtain_cred_rejects_modified_v_x_g() {
+        let (mut rng, pp, isk, ipar) = setup_issuer(21);
+        let attrs = vec![scalar(2), scalar(4), scalar(6)];
+        let (mut cred, proof) = issue_cred(&mut rng, &pp, &isk, &ipar, &attrs).expect("issue");
+        cred.v_x_g += generator();
+        let err = obtain_cred(&ipar, &attrs, cred, &proof).expect_err("obtain");
+        assert!(matches!(err, DkvacError::InvalidProof));
+    }
+
+    #[test]
+    fn obtain_cred_rejects_modified_component() {
+        let (mut rng, pp, isk, ipar) = setup_issuer(22);
+        let attrs = vec![scalar(3), scalar(5), scalar(8)];
+        let (mut cred, proof) = issue_cred(&mut rng, &pp, &isk, &ipar, &attrs).expect("issue");
+        let key = scalar_to_key(&scalar(3));
+        *cred.components.get_mut(&key).expect("component") += generator();
+        let err = obtain_cred(&ipar, &attrs, cred, &proof).expect_err("obtain");
+        assert!(matches!(err, DkvacError::InvalidProof));
+    }
+
+    #[test]
     fn show_attribute_not_in_credential_rejects() {
         let (mut rng, pp, isk, ipar) = setup_issuer(3);
         let attrs = vec![scalar(7), scalar(9)];
@@ -519,9 +606,34 @@ mod tests {
         let (mut rng, pp, isk, ipar) = setup_issuer(6);
         let attrs = vec![scalar(1), scalar(2), scalar(3)];
         let (encdel, dk) = issue_del(&mut rng, &pp, &isk, &ipar, &attrs).expect("issue del");
-        let cred = obtain_del(&pp, &encdel, &dk).expect("obtain del");
+        let cred = obtain_del(&pp, &ipar, &encdel, &dk).expect("obtain del");
         let show = show_cred(&mut rng, &cred, &[scalar(1), scalar(3)]).expect("show");
         assert!(verify_show(&isk, &show).expect("verify"));
+    }
+
+    #[test]
+    fn tamper_initial_encrypted_e_rejects() {
+        let (mut rng, pp, isk, ipar) = setup_issuer(23);
+        let attrs = vec![scalar(1), scalar(2), scalar(3)];
+        let (mut encdel, dk) = issue_del(&mut rng, &pp, &isk, &ipar, &attrs).expect("issue del");
+        encdel.steps[0].ec.e += generator();
+        let err = obtain_del(&pp, &ipar, &encdel, &dk).expect_err("tamper");
+        assert!(matches!(err, DkvacError::InvalidProof));
+    }
+
+    #[test]
+    fn tamper_initial_encrypted_component_rejects() {
+        let (mut rng, pp, isk, ipar) = setup_issuer(24);
+        let attrs = vec![scalar(4), scalar(5), scalar(6)];
+        let (mut encdel, dk) = issue_del(&mut rng, &pp, &isk, &ipar, &attrs).expect("issue del");
+        let key = scalar_to_key(&scalar(4));
+        *encdel.steps[0]
+            .ec
+            .components
+            .get_mut(&key)
+            .expect("component") += generator();
+        let err = obtain_del(&pp, &ipar, &encdel, &dk).expect_err("tamper");
+        assert!(matches!(err, DkvacError::InvalidProof));
     }
 
     #[test]
@@ -531,7 +643,7 @@ mod tests {
         let (encdel, dk) = issue_del(&mut rng, &pp, &isk, &ipar, &attrs).expect("issue del");
         let subset = vec![scalar(4), scalar(6)];
         let (encdel, dk) = delegate(&mut rng, &encdel, &dk, &subset).expect("delegate");
-        let cred = obtain_del(&pp, &encdel, &dk).expect("obtain del");
+        let cred = obtain_del(&pp, &ipar, &encdel, &dk).expect("obtain del");
         let show = show_cred(&mut rng, &cred, &subset).expect("show");
         assert!(verify_show(&isk, &show).expect("verify"));
     }
@@ -545,7 +657,7 @@ mod tests {
             delegate(&mut rng, &encdel, &dk, &[scalar(11), scalar(13), scalar(14)]).expect("d1");
         let (encdel, dk) =
             delegate(&mut rng, &encdel, &dk, &[scalar(11), scalar(14)]).expect("d2");
-        let cred = obtain_del(&pp, &encdel, &dk).expect("obtain del");
+        let cred = obtain_del(&pp, &ipar, &encdel, &dk).expect("obtain del");
         let show = show_cred(&mut rng, &cred, &[scalar(14)]).expect("show");
         assert!(verify_show(&isk, &show).expect("verify"));
     }
@@ -565,7 +677,7 @@ mod tests {
         let attrs = vec![scalar(30), scalar(31), scalar(32)];
         let (encdel, dk) = issue_del(&mut rng, &pp, &isk, &ipar, &attrs).expect("issue del");
         let (encdel, dk) = delegate(&mut rng, &encdel, &dk, &[scalar(30), scalar(32)]).expect("d1");
-        let cred = obtain_del(&pp, &encdel, &dk).expect("obtain del");
+        let cred = obtain_del(&pp, &ipar, &encdel, &dk).expect("obtain del");
         let err = show_cred(&mut rng, &cred, &[scalar(31)]).expect_err("removed");
         assert!(matches!(err, DkvacError::InvalidDisclosure));
         let show = show_cred(&mut rng, &cred, &[scalar(30)]).expect("show");
@@ -579,7 +691,7 @@ mod tests {
         let (encdel, dk) = issue_del(&mut rng, &pp, &isk, &ipar, &attrs).expect("issue del");
         let (mut encdel, dk) = delegate(&mut rng, &encdel, &dk, &[scalar(1), scalar(3)]).expect("delegate");
         encdel.steps.last_mut().expect("step").ec.e += generator();
-        let err = obtain_del(&pp, &encdel, &dk).expect_err("tamper");
+        let err = obtain_del(&pp, &ipar, &encdel, &dk).expect_err("tamper");
         assert!(matches!(err, DkvacError::InvalidProof));
     }
 
@@ -598,7 +710,7 @@ mod tests {
             .components
             .get_mut(&key)
             .expect("component") += generator();
-        let err = obtain_del(&pp, &encdel, &dk).expect_err("tamper");
+        let err = obtain_del(&pp, &ipar, &encdel, &dk).expect_err("tamper");
         assert!(matches!(err, DkvacError::InvalidProof));
     }
 }
