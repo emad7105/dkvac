@@ -3,6 +3,7 @@ use crate::group::{Point, Scalar, derive_h, generator, is_identity, random_scala
 use crate::proof::{DummyProof, DummyProofSystem, ProofStatement, ProofSystem};
 use crate::zk::{
     VectorDelegateProof, VectorDelegateStatement, VectorDelegateWitness,
+    VectorIssueProofPlaceholder,
     VectorPresentationProof, VectorPresentationStatement, VectorPresentationWitness,
 };
 use rand_core::{CryptoRng, RngCore};
@@ -124,7 +125,7 @@ pub fn issue_cred<R: CryptoRng + RngCore>(
     isk: &IssuerSecretKey,
     _ipar: &IssuerPublicParams,
     message: &Message,
-) -> Result<(Credential, DummyProof), DkvacError> {
+) -> Result<(Credential, VectorIssueProofPlaceholder), DkvacError> {
     validate_message(pp, message)?;
 
     let v = random_scalar(rng);
@@ -138,7 +139,7 @@ pub fn issue_cred<R: CryptoRng + RngCore>(
         malleable_keys,
         message: message.clone(),
     };
-    Ok((cred, DummyProofSystem::prove(ProofStatement::Inst2Issue)))
+    Ok((cred, VectorIssueProofPlaceholder::new()))
 }
 
 pub fn obtain_cred(
@@ -146,9 +147,9 @@ pub fn obtain_cred(
     _ipar: &IssuerPublicParams,
     message: &Message,
     cred: Credential,
-    proof: &DummyProof,
+    proof: &VectorIssueProofPlaceholder,
 ) -> Result<Credential, DkvacError> {
-    if !DummyProofSystem::verify(ProofStatement::Inst2Issue, proof) {
+    if !proof.verify() {
         return Err(DkvacError::InvalidProof);
     }
     validate_message(pp, message)?;

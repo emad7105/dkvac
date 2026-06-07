@@ -164,6 +164,11 @@ pub struct VectorPresentationProof {
     pub z_s: BTreeMap<usize, Scalar>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VectorIssueProofPlaceholder {
+    pub warning: String,
+}
+
 impl SubsetDelegateProof {
     pub fn prove<R: CryptoRng + RngCore>(
         rng: &mut R,
@@ -578,6 +583,20 @@ impl VectorPresentationProof {
             }
         }
 
+        true
+    }
+}
+
+impl VectorIssueProofPlaceholder {
+    pub fn new() -> Self {
+        Self {
+            warning: "WARNING: vector issuance proof is not implemented. This placeholder is only for algebraic protocol testing.".to_string(),
+        }
+    }
+
+    pub fn verify(&self) -> bool {
+        // WARNING: vector issuance proof is not implemented.
+        // This placeholder is only for algebraic protocol testing.
         true
     }
 }
@@ -1075,5 +1094,12 @@ mod tests {
         let mut bad_statement = statement.clone();
         bad_statement.q_hidden.remove(&1);
         assert!(!proof.verify(&bad_statement));
+    }
+
+    #[test]
+    fn vector_issue_proof_placeholder_has_warning() {
+        let proof = VectorIssueProofPlaceholder::new();
+        assert!(proof.verify());
+        assert!(proof.warning.contains("not implemented"));
     }
 }
