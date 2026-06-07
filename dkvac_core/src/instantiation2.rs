@@ -1,7 +1,10 @@
 use crate::error::DkvacError;
 use crate::group::{Point, Scalar, derive_h, generator, is_identity, random_scalar};
 use crate::proof::{DummyProof, DummyProofSystem, ProofStatement, ProofSystem};
-use crate::zk::{VectorDelegateProof, VectorDelegateStatement, VectorDelegateWitness};
+use crate::zk::{
+    VectorDelegateProof, VectorDelegateStatement, VectorDelegateWitness,
+    VectorPresentationProof, VectorPresentationStatement, VectorPresentationWitness,
+};
 use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -76,7 +79,7 @@ pub struct Show {
     pub w: Point,
     pub q_hidden: BTreeMap<usize, Point>,
     pub disclosed: BTreeMap<usize, Scalar>,
-    pub proof: DummyProof,
+    pub proof: VectorPresentationProof,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -184,6 +187,10 @@ pub fn show_cred<R: CryptoRng + RngCore>(
 
     let hidden_indices = hidden_indices(pp.max_attributes, &policy.disclosed_indices);
     let mut beta_hidden = BTreeMap::new();
+    let hidden_attributes = hidden_indices
+        .iter()
+        .map(|idx| (*idx, message.attributes[*idx]))
+        .collect::<BTreeMap<_, _>>();
     let q_hidden = hidden_indices
         .iter()
         .map(|idx| {
@@ -193,25 +200,45 @@ pub fn show_cred<R: CryptoRng + RngCore>(
         })
         .collect::<BTreeMap<_, _>>();
 
-    let _p = hidden_indices.iter().try_fold(-(mu_prime * ipar.r_h), |acc, idx| {
+    let p = hidden_indices.iter().try_fold(-(mu_prime * ipar.r_h), |acc, idx| {
         let beta_i = beta_hidden
             .get(idx)
             .copied()
             .ok_or(DkvacError::InvalidDisclosure)?;
         Ok::<Point, DkvacError>(acc + beta_i * ipar.r_y_i_g[*idx])
     })?;
+    let y_i_points = hidden_indices
+        .iter()
+        .map(|idx| (*idx, ipar.r_y_i_g[*idx]))
+        .collect::<BTreeMap<_, _>>();
+    let proof = VectorPresentationProof::prove(
+        rng,
+        &VectorPresentationStatement {
+            r_h: ipar.r_h,
+            y_i_points,
+            v_prime,
+            p,
+            q_hidden: q_hidden.clone(),
+        },
+        &VectorPresentationWitness {
+            mu_prime,
+            hidden_attributes,
+            beta: beta_hidden,
+        },
+    );
 
     Ok(Show {
         v_prime,
         w,
         q_hidden,
         disclosed,
-        proof: DummyProofSystem::prove(ProofStatement::Inst2Show),
+        proof,
     })
 }
 
 pub fn verify_show(
     pp: &PublicParams,
+    ipar: &IssuerPublicParams,
     isk: &IssuerSecretKey,
     policy: &DisclosurePolicy,
     show: &Show,
@@ -250,12 +277,19 @@ pub fn verify_show(
         })?;
 
     let p = isk.r * (isk.x * show.v_prime + hidden_sum - show.w + disclosed_sum);
-    if !DummyProofSystem::verify(ProofStatement::Inst2Show, &show.proof) {
-        return Err(DkvacError::InvalidProof);
-    }
+    let y_i_points = hidden_indices
+        .iter()
+        .map(|idx| (*idx, ipar.r_y_i_g[*idx]))
+        .collect::<BTreeMap<_, _>>();
+    let statement = VectorPresentationStatement {
+        r_h: ipar.r_h,
+        y_i_points,
+        v_prime: show.v_prime,
+        p,
+        q_hidden: show.q_hidden.clone(),
+    };
 
-    let _ = p;
-    Ok(true)
+    Ok(show.proof.verify(&statement))
 }
 
 pub fn issue_del<R: CryptoRng + RngCore>(
@@ -557,7 +591,7 @@ mod tests {
         let (cred, proof) = issue_cred(&mut rng, &pp, &isk, &ipar, &message).expect("issue");
         let cred = obtain_cred(&pp, &ipar, &message, cred, &proof).expect("obtain");
         let show = show_cred(&mut rng, &pp, &ipar, &message, &policy, &cred).expect("show");
-        assert!(verify_show(&pp, &isk, &policy, &show).expect("verify"));
+        assert!(verify_show(&pp, &ipar, &isk, &policy, &show).expect("verify"));
     }
 
     #[test]
@@ -570,7 +604,7 @@ mod tests {
         let (cred, proof) = issue_cred(&mut rng, &pp, &isk, &ipar, &message).expect("issue");
         let cred = obtain_cred(&pp, &ipar, &message, cred, &proof).expect("obtain");
         let show = show_cred(&mut rng, &pp, &ipar, &message, &policy, &cred).expect("show");
-        assert!(verify_show(&pp, &isk, &policy, &show).expect("verify"));
+        assert!(verify_show(&pp, &ipar, &isk, &policy, &show).expect("verify"));
     }
 
     #[test]
@@ -587,7 +621,7 @@ mod tests {
     }
 
     #[test]
-    fn verify_wrong_disclosed_value_currently_accepts_with_dummy_proof() {
+    fn verify_wrong_disclosed_value_rejects() {
         let (mut rng, pp, isk, ipar) = fixture(4);
         let message = sample_message();
         let policy = DisclosurePolicy {
@@ -597,12 +631,12 @@ mod tests {
         let cred = obtain_cred(&pp, &ipar, &message, cred, &proof).expect("obtain");
         let mut show = show_cred(&mut rng, &pp, &ipar, &message, &policy, &cred).expect("show");
         show.disclosed.insert(1, scalar(99));
-        assert!(verify_show(&pp, &isk, &policy, &show).expect("verify"));
+        assert!(!verify_show(&pp, &ipar, &isk, &policy, &show).expect("verify"));
     }
 
     #[test]
     fn verify_identity_v_prime_rejects() {
-        let (_, pp, isk, _) = fixture(4);
+        let (_, pp, isk, ipar) = fixture(4);
         let policy = DisclosurePolicy {
             disclosed_indices: BTreeSet::from([0]),
         };
@@ -611,9 +645,15 @@ mod tests {
             w: generator(),
             q_hidden: BTreeMap::from([(1, generator()), (2, generator()), (3, generator())]),
             disclosed: BTreeMap::from([(0, scalar(1))]),
-            proof: DummyProof,
+            proof: VectorPresentationProof {
+                a_p: generator(),
+                a_q: BTreeMap::from([(1, generator()), (2, generator()), (3, generator())]),
+                z_mu_prime: scalar(1),
+                z_beta: BTreeMap::from([(1, scalar(1)), (2, scalar(1)), (3, scalar(1))]),
+                z_s: BTreeMap::from([(1, scalar(1)), (2, scalar(1)), (3, scalar(1))]),
+            },
         };
-        let err = verify_show(&pp, &isk, &policy, &show).expect_err("identity");
+        let err = verify_show(&pp, &ipar, &isk, &policy, &show).expect_err("identity");
         assert!(matches!(err, DkvacError::IdentityPoint));
     }
 
@@ -627,7 +667,7 @@ mod tests {
         let (encdel, dk) = issue_del(&mut rng, &pp, &isk, &ipar, &message).expect("issue del");
         let cred = obtain_del(&pp, &encdel, &dk).expect("obtain del");
         let show = show_cred(&mut rng, &pp, &ipar, &cred.message, &policy, &cred).expect("show");
-        assert!(verify_show(&pp, &isk, &policy, &show).expect("verify"));
+        assert!(verify_show(&pp, &ipar, &isk, &policy, &show).expect("verify"));
     }
 
     #[test]
@@ -645,7 +685,7 @@ mod tests {
             disclosed_indices: BTreeSet::from([0, 2]),
         };
         let show = show_cred(&mut rng, &pp, &ipar, &cred.message, &policy, &cred).expect("show");
-        assert!(verify_show(&pp, &isk, &policy, &show).expect("verify"));
+        assert!(verify_show(&pp, &ipar, &isk, &policy, &show).expect("verify"));
         assert_eq!(cred.message, next);
     }
 
@@ -709,8 +749,51 @@ mod tests {
             disclosed_indices: BTreeSet::from([1, 2]),
         };
         let show = show_cred(&mut rng, &pp, &ipar, &cred.message, &policy, &cred).expect("show");
-        assert!(verify_show(&pp, &isk, &policy, &show).expect("verify"));
+        assert!(verify_show(&pp, &ipar, &isk, &policy, &show).expect("verify"));
         assert_eq!(cred.message, next2);
+    }
+
+    #[test]
+    fn modified_q_hidden_rejects() {
+        let (mut rng, pp, isk, ipar) = fixture(4);
+        let message = sample_message();
+        let policy = DisclosurePolicy {
+            disclosed_indices: BTreeSet::from([1, 3]),
+        };
+        let (cred, proof) = issue_cred(&mut rng, &pp, &isk, &ipar, &message).expect("issue");
+        let cred = obtain_cred(&pp, &ipar, &message, cred, &proof).expect("obtain");
+        let mut show = show_cred(&mut rng, &pp, &ipar, &message, &policy, &cred).expect("show");
+        *show.q_hidden.get_mut(&0).expect("q hidden") += generator();
+        assert!(!verify_show(&pp, &ipar, &isk, &policy, &show).expect("verify"));
+    }
+
+    #[test]
+    fn modified_w_rejects() {
+        let (mut rng, pp, isk, ipar) = fixture(4);
+        let message = sample_message();
+        let policy = DisclosurePolicy {
+            disclosed_indices: BTreeSet::from([1, 3]),
+        };
+        let (cred, proof) = issue_cred(&mut rng, &pp, &isk, &ipar, &message).expect("issue");
+        let cred = obtain_cred(&pp, &ipar, &message, cred, &proof).expect("obtain");
+        let mut show = show_cred(&mut rng, &pp, &ipar, &message, &policy, &cred).expect("show");
+        show.w += generator();
+        assert!(!verify_show(&pp, &ipar, &isk, &policy, &show).expect("verify"));
+    }
+
+    #[test]
+    fn missing_hidden_index_rejects() {
+        let (mut rng, pp, isk, ipar) = fixture(4);
+        let message = sample_message();
+        let policy = DisclosurePolicy {
+            disclosed_indices: BTreeSet::from([1, 3]),
+        };
+        let (cred, proof) = issue_cred(&mut rng, &pp, &isk, &ipar, &message).expect("issue");
+        let cred = obtain_cred(&pp, &ipar, &message, cred, &proof).expect("obtain");
+        let mut show = show_cred(&mut rng, &pp, &ipar, &message, &policy, &cred).expect("show");
+        show.q_hidden.remove(&0);
+        let err = verify_show(&pp, &ipar, &isk, &policy, &show).expect_err("verify");
+        assert!(matches!(err, DkvacError::InvalidDisclosure));
     }
 
     #[test]
