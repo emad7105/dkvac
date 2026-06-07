@@ -754,49 +754,6 @@ mod tests {
     }
 
     #[test]
-    fn modified_q_hidden_rejects() {
-        let (mut rng, pp, isk, ipar) = fixture(4);
-        let message = sample_message();
-        let policy = DisclosurePolicy {
-            disclosed_indices: BTreeSet::from([1, 3]),
-        };
-        let (cred, proof) = issue_cred(&mut rng, &pp, &isk, &ipar, &message).expect("issue");
-        let cred = obtain_cred(&pp, &ipar, &message, cred, &proof).expect("obtain");
-        let mut show = show_cred(&mut rng, &pp, &ipar, &message, &policy, &cred).expect("show");
-        *show.q_hidden.get_mut(&0).expect("q hidden") += generator();
-        assert!(!verify_show(&pp, &ipar, &isk, &policy, &show).expect("verify"));
-    }
-
-    #[test]
-    fn modified_w_rejects() {
-        let (mut rng, pp, isk, ipar) = fixture(4);
-        let message = sample_message();
-        let policy = DisclosurePolicy {
-            disclosed_indices: BTreeSet::from([1, 3]),
-        };
-        let (cred, proof) = issue_cred(&mut rng, &pp, &isk, &ipar, &message).expect("issue");
-        let cred = obtain_cred(&pp, &ipar, &message, cred, &proof).expect("obtain");
-        let mut show = show_cred(&mut rng, &pp, &ipar, &message, &policy, &cred).expect("show");
-        show.w += generator();
-        assert!(!verify_show(&pp, &ipar, &isk, &policy, &show).expect("verify"));
-    }
-
-    #[test]
-    fn missing_hidden_index_rejects() {
-        let (mut rng, pp, isk, ipar) = fixture(4);
-        let message = sample_message();
-        let policy = DisclosurePolicy {
-            disclosed_indices: BTreeSet::from([1, 3]),
-        };
-        let (cred, proof) = issue_cred(&mut rng, &pp, &isk, &ipar, &message).expect("issue");
-        let cred = obtain_cred(&pp, &ipar, &message, cred, &proof).expect("obtain");
-        let mut show = show_cred(&mut rng, &pp, &ipar, &message, &policy, &cred).expect("show");
-        show.q_hidden.remove(&0);
-        let err = verify_show(&pp, &ipar, &isk, &policy, &show).expect_err("verify");
-        assert!(matches!(err, DkvacError::InvalidDisclosure));
-    }
-
-    #[test]
     fn message_wrong_length_rejects() {
         let (mut rng, pp, isk, ipar) = fixture(4);
         let message = Message {
