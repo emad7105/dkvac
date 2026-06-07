@@ -1,6 +1,5 @@
 use crate::error::DkvacError;
 use crate::group::{Point, Scalar, derive_h, generator, is_identity, random_scalar};
-use crate::proof::{DummyProof, DummyProofSystem, ProofStatement, ProofSystem};
 use crate::zk::{
     VectorDelegateProof, VectorDelegateStatement, VectorDelegateWitness,
     VectorIssueProofPlaceholder,
@@ -33,6 +32,8 @@ pub struct IssuerPublicParams {
     pub r_h: Point,
     pub r_x_g: Point,
     pub r_y_i_g: Vec<Point>,
+    pub x_g: Point,
+    pub y_i_g: Vec<Point>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,6 +46,7 @@ pub struct Message {
 pub struct Credential {
     pub v_g: Point,
     pub c: Point,
+    pub y_power_points: Vec<Point>,
     pub malleable_keys: BTreeMap<usize, Point>,
     pub message: Message,
 }
@@ -59,6 +61,7 @@ pub struct EncryptedCredential {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DelegationStep {
     pub ec: EncryptedCredential,
+    pub y_power_points: Vec<Point>,
     pub malleable_keys: BTreeMap<usize, Point>,
     pub message: Message,
     pub proof: Inst2DelegationProof,
@@ -85,7 +88,7 @@ pub struct Show {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Inst2DelegationProof {
-    Issue(DummyProof),
+    Issue(VectorIssueProofPlaceholder),
     Delegate(VectorDelegateProof),
 }
 
@@ -115,6 +118,10 @@ pub fn keygen<R: CryptoRng + RngCore>(
         r_y_i_g: (0..pp.max_attributes)
             .map(|idx| (isk.r * y_power(&isk.y, idx)) * pp.g)
             .collect(),
+        x_g: isk.x * pp.g,
+        y_i_g: (0..pp.max_attributes)
+            .map(|idx| y_power(&isk.y, idx) * pp.g)
+            .collect(),
     };
     Ok((isk, ipar))
 }
@@ -130,12 +137,13 @@ pub fn issue_cred<R: CryptoRng + RngCore>(
 
     let v = random_scalar(rng);
     let v_g = v * pp.g;
-    let mac_scalar = compute_mac_scalar(isk, message)?;
-    let c = mac_scalar * v_g;
-    let malleable_keys = compute_malleable_keys(&isk.y, &message.malleable_indices, &v_g)?;
+    let y_power_points = compute_y_power_points(&isk.y, pp.max_attributes, &v_g);
+    let c = compute_mac_point(isk, message, &v_g, &y_power_points)?;
+    let malleable_keys = select_malleable_keys(&y_power_points, &message.malleable_indices)?;
     let cred = Credential {
         v_g,
         c,
+        y_power_points,
         malleable_keys,
         message: message.clone(),
     };
@@ -156,7 +164,14 @@ pub fn obtain_cred(
     if &cred.message != message {
         return Err(DkvacError::InvalidAttributeSet);
     }
-    validate_malleable_keys(&cred.message, &cred.malleable_keys)?;
+    if cred.y_power_points.len() != pp.max_attributes {
+        return Err(DkvacError::InvalidAttributeSet);
+    }
+    validate_malleable_keys(
+        &cred.message,
+        &cred.y_power_points,
+        &cred.malleable_keys,
+    )?;
     Ok(cred)
 }
 
@@ -173,7 +188,11 @@ pub fn show_cred<R: CryptoRng + RngCore>(
     if &cred.message != message {
         return Err(DkvacError::InvalidDisclosure);
     }
-    validate_malleable_keys(&cred.message, &cred.malleable_keys)?;
+    validate_malleable_keys(
+        &cred.message,
+        &cred.y_power_points,
+        &cred.malleable_keys,
+    )?;
 
     let mu = random_scalar(rng);
     let mu_prime = random_scalar(rng);
@@ -305,16 +324,18 @@ pub fn issue_del<R: CryptoRng + RngCore>(
     let v = random_scalar(rng);
     let z = random_scalar(rng);
     let v_g = v * pp.g;
-    let mac_scalar = compute_mac_scalar(isk, message)?;
+    let y_power_points = compute_y_power_points(&isk.y, pp.max_attributes, &v_g);
+    let c = compute_mac_point(isk, message, &v_g, &y_power_points)?;
     let step = DelegationStep {
         ec: EncryptedCredential {
             ev: v_g + z * pp.h,
             ez: z * pp.g,
-            c: mac_scalar * v_g,
+            c,
         },
-        malleable_keys: compute_malleable_keys(&isk.y, &message.malleable_indices, &v_g)?,
+        y_power_points: y_power_points.clone(),
+        malleable_keys: select_malleable_keys(&y_power_points, &message.malleable_indices)?,
         message: message.clone(),
-        proof: Inst2DelegationProof::Issue(DummyProofSystem::prove(ProofStatement::Inst2Issue)),
+        proof: Inst2DelegationProof::Issue(VectorIssueProofPlaceholder::new()),
     };
 
     Ok((EncDel { steps: vec![step] }, z))
@@ -352,17 +373,12 @@ pub fn delegate<R: CryptoRng + RngCore>(
         Ok(acc + delta * *mk)
     })?;
 
-    let malleable_keys = next_message
-        .malleable_indices
+    let y_power_points = current
+        .y_power_points
         .iter()
-        .map(|idx| {
-            let mk = current
-                .malleable_keys
-                .get(idx)
-                .ok_or(DkvacError::InvalidDelegation)?;
-            Ok((*idx, mu * *mk))
-        })
-        .collect::<Result<BTreeMap<_, _>, DkvacError>>()?;
+        .map(|point| mu * *point)
+        .collect::<Vec<_>>();
+    let malleable_keys = select_malleable_keys(&y_power_points, &next_message.malleable_indices)?;
 
     let new_ec = EncryptedCredential {
         ev: mu * current.ec.ev,
@@ -379,6 +395,7 @@ pub fn delegate<R: CryptoRng + RngCore>(
     };
     let next_step = DelegationStep {
         ec: new_ec,
+        y_power_points,
         malleable_keys,
         message: next_message.clone(),
         proof: Inst2DelegationProof::Delegate(VectorDelegateProof::prove(
@@ -404,6 +421,7 @@ pub fn obtain_del(
     Ok(Credential {
         v_g,
         c: final_step.ec.c,
+        y_power_points: final_step.y_power_points.clone(),
         malleable_keys: final_step.malleable_keys.clone(),
         message: final_step.message.clone(),
     })
@@ -462,14 +480,44 @@ pub fn compute_mac_scalar(
     Ok(mac_scalar)
 }
 
-fn compute_malleable_keys(
-    y: &Scalar,
-    malleable_indices: &BTreeSet<usize>,
+fn compute_y_power_points(y: &Scalar, max_attributes: usize, v_g: &Point) -> Vec<Point> {
+    (0..max_attributes)
+        .map(|idx| y_power(y, idx) * *v_g)
+        .collect()
+}
+
+fn compute_mac_point(
+    isk: &IssuerSecretKey,
+    message: &Message,
     v_g: &Point,
+    y_power_points: &[Point],
+) -> Result<Point, DkvacError> {
+    if y_power_points.len() != message.attributes.len() {
+        return Err(DkvacError::InvalidAttributeSet);
+    }
+    Ok(isk.x * *v_g
+        + message
+            .attributes
+            .iter()
+            .enumerate()
+            .fold(Point::default(), |acc, (idx, attribute)| {
+                acc + *attribute * y_power_points[idx]
+            }))
+}
+
+fn select_malleable_keys(
+    y_power_points: &[Point],
+    malleable_indices: &BTreeSet<usize>,
 ) -> Result<BTreeMap<usize, Point>, DkvacError> {
     malleable_indices
         .iter()
-        .map(|idx| Ok((*idx, y_power(y, *idx) * *v_g)))
+        .map(|idx| {
+            let point = y_power_points
+                .get(*idx)
+                .copied()
+                .ok_or(DkvacError::IndexOutOfRange)?;
+            Ok((*idx, point))
+        })
         .collect()
 }
 
@@ -484,11 +532,20 @@ fn validate_policy(pp: &PublicParams, policy: &DisclosurePolicy) -> Result<(), D
 
 fn validate_malleable_keys(
     message: &Message,
+    y_power_points: &[Point],
     malleable_keys: &BTreeMap<usize, Point>,
 ) -> Result<(), DkvacError> {
     let actual = malleable_keys.keys().copied().collect::<BTreeSet<_>>();
     if actual != message.malleable_indices {
         return Err(DkvacError::InvalidDelegation);
+    }
+    for (idx, point) in malleable_keys {
+        let expected = y_power_points
+            .get(*idx)
+            .ok_or(DkvacError::IndexOutOfRange)?;
+        if point != expected {
+            return Err(DkvacError::InvalidDelegation);
+        }
     }
     Ok(())
 }
@@ -507,16 +564,21 @@ fn validate_encdel<'a>(
     let first = steps.next().ok_or(DkvacError::InvalidDelegation)?;
     validate_message(pp, &first.message)?;
     match &first.proof {
-        Inst2DelegationProof::Issue(proof)
-            if DummyProofSystem::verify(ProofStatement::Inst2Issue, proof) => {}
+        Inst2DelegationProof::Issue(proof) if proof.verify() => {}
         _ => return Err(DkvacError::InvalidProof),
     }
-    validate_malleable_keys(&first.message, &first.malleable_keys)?;
+    if first.y_power_points.len() != pp.max_attributes {
+        return Err(DkvacError::InvalidDelegation);
+    }
+    validate_malleable_keys(&first.message, &first.y_power_points, &first.malleable_keys)?;
 
     let mut previous = first;
     for step in steps {
         validate_message(pp, &step.message)?;
-        validate_malleable_keys(&step.message, &step.malleable_keys)?;
+        if step.y_power_points.len() != pp.max_attributes {
+            return Err(DkvacError::InvalidDelegation);
+        }
+        validate_malleable_keys(&step.message, &step.y_power_points, &step.malleable_keys)?;
         if !is_valid_delegation(&previous.message, &step.message) {
             return Err(DkvacError::InvalidDelegation);
         }
@@ -606,6 +668,41 @@ mod tests {
         let cred = obtain_cred(&pp, &ipar, &message, cred, &proof).expect("obtain");
         let show = show_cred(&mut rng, &pp, &ipar, &message, &policy, &cred).expect("show");
         assert!(verify_show(&pp, &ipar, &isk, &policy, &show).expect("verify"));
+    }
+
+    #[test]
+    fn vector_credential_contains_all_y_power_points() {
+        let (mut rng, pp, isk, ipar) = fixture(4);
+        let message = sample_message();
+        let (cred, proof) = issue_cred(&mut rng, &pp, &isk, &ipar, &message).expect("issue");
+        let cred = obtain_cred(&pp, &ipar, &message, cred, &proof).expect("obtain");
+        assert_eq!(cred.y_power_points.len(), pp.max_attributes);
+        for idx in 0..pp.max_attributes {
+            assert_eq!(cred.y_power_points[idx], cred.v_g * y_power(&isk.y, idx));
+        }
+    }
+
+    #[test]
+    fn vector_malleable_keys_equal_y_power_points_subset() {
+        let (mut rng, pp, isk, ipar) = fixture(4);
+        let message = sample_message();
+        let (cred, proof) = issue_cred(&mut rng, &pp, &isk, &ipar, &message).expect("issue");
+        let cred = obtain_cred(&pp, &ipar, &message, cred, &proof).expect("obtain");
+        for idx in &message.malleable_indices {
+            assert_eq!(cred.malleable_keys[idx], cred.y_power_points[*idx]);
+        }
+    }
+
+    #[test]
+    fn vector_issue_del_contains_malleable_keys_from_y_power_points() {
+        let (mut rng, pp, isk, ipar) = fixture(4);
+        let message = sample_message();
+        let (encdel, _dk) = issue_del(&mut rng, &pp, &isk, &ipar, &message).expect("issue del");
+        let first = &encdel.steps[0];
+        assert_eq!(first.y_power_points.len(), pp.max_attributes);
+        for idx in &message.malleable_indices {
+            assert_eq!(first.malleable_keys[idx], first.y_power_points[*idx]);
+        }
     }
 
     #[test]
