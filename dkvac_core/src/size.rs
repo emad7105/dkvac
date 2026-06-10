@@ -16,7 +16,8 @@ pub fn inst1_credential_size(cred: &instantiation1::Credential) -> usize {
 }
 
 pub fn inst1_show_size(show: &instantiation1::Show) -> usize {
-    (2 * POINT_BYTES) + (show.disclosed.len() * SCALAR_BYTES)
+    // (2 * POINT_BYTES) + (show.disclosed.len() * SCALAR_BYTES)
+    2 * POINT_BYTES
 }
 
 pub fn inst1_direct_issue_proof_size(proof: &SubsetDirectIssueProof) -> usize {
