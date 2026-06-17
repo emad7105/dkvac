@@ -169,6 +169,11 @@ pub struct VectorIssueProofPlaceholder {
     pub warning: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VectorIssuePaperProofPlaceholder {
+    pub warning: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VectorIssueOption3Statement {
     pub g: Point,
@@ -624,6 +629,21 @@ impl VectorIssueProofPlaceholder {
     pub fn verify(&self) -> bool {
         // WARNING: vector issuance proof is not implemented.
         // This placeholder is only for algebraic protocol testing.
+        true
+    }
+}
+
+impl VectorIssuePaperProofPlaceholder {
+    pub fn new() -> Self {
+        Self {
+            warning: "WARNING: exact paper rel_veciss is not implemented. The updated relation contains non-linear witness products such as rC = vD. Do not use this placeholder for security claims.".to_string(),
+        }
+    }
+
+    pub fn verify(&self) -> bool {
+        // WARNING: exact paper rel_veciss is not implemented.
+        // The updated relation contains non-linear witness products such as rC = vD.
+        // Do not use this placeholder for security claims.
         true
     }
 }
@@ -1264,5 +1284,13 @@ mod tests {
         let proof = VectorIssueProofPlaceholder::new();
         assert!(proof.verify());
         assert!(proof.warning.contains("not implemented"));
+    }
+
+    #[test]
+    fn vector_issue_paper_placeholder_mentions_updated_relation() {
+        let proof = VectorIssuePaperProofPlaceholder::new();
+        assert!(proof.verify());
+        assert!(proof.warning.contains("rel_veciss"));
+        assert!(proof.warning.contains("non-linear"));
     }
 }
