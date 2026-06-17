@@ -207,8 +207,9 @@ fn bench_inst2(c: &mut Criterion) {
 
 fn criterion_config() -> Criterion {
     Criterion::default()
-        .sample_size(30)
-        .measurement_time(Duration::from_secs(10))
+        .sample_size(10)
+        .warm_up_time(Duration::from_secs(1))
+        .measurement_time(Duration::from_secs(1))
 }
 
 criterion_group! {

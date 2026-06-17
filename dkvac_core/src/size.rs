@@ -87,7 +87,7 @@ pub fn inst2_show_size(show: &instantiation2::Show) -> usize {
         + inst2_vector_presentation_proof_size(&show.proof)
 }
 
-pub fn inst2_vector_issue_proof_size(proof: &VectorDirectIssueProof) -> usize {
+pub fn inst2_vector_direct_issue_proof_size(proof: &VectorDirectIssueProof) -> usize {
     (5 * POINT_BYTES)
         + ((proof.a_malleable_keys.len() + proof.a_y.len()) * (USIZE_BYTES + POINT_BYTES))
         + (4 * SCALAR_BYTES)
@@ -139,7 +139,7 @@ pub fn inst2_issue_cred_output_size(
     cred: &instantiation2::Credential,
     proof: &VectorDirectIssueProof,
 ) -> usize {
-    inst2_credential_size(cred) + inst2_vector_issue_proof_size(proof)
+    inst2_credential_size(cred) + inst2_vector_direct_issue_proof_size(proof)
 }
 
 pub fn inst2_issue_del_output_size(encdel: &instantiation2::EncDel) -> usize {
@@ -164,7 +164,9 @@ mod tests {
     use crate::group::{generator, Scalar};
     use crate::instantiation1;
     use crate::instantiation2;
-    use crate::zk::VectorPresentationProof;
+    use crate::zk::{
+        VectorDelegatableIssueProof, VectorDirectIssueProof, VectorPresentationProof,
+    };
     use rand_chacha::ChaCha20Rng;
     use rand_core::SeedableRng;
     use std::collections::{BTreeMap, BTreeSet};
@@ -220,6 +222,60 @@ mod tests {
         assert_eq!(
             inst2_credential_size(&cred),
             (2 * POINT_BYTES) + (4 * (USIZE_BYTES + POINT_BYTES)) + (4 * USIZE_BYTES)
+        );
+    }
+
+    #[test]
+    fn inst2_direct_issue_proof_counts_all_fields() {
+        let proof = VectorDirectIssueProof {
+            a_v: point(1),
+            a_c: point(2),
+            a_malleable_keys: BTreeMap::from([(1usize, point(3)), (3usize, point(4))]),
+            a_r: point(5),
+            a_r_inv: point(6),
+            a_x: point(7),
+            a_y: BTreeMap::from([(1usize, point(8)), (3usize, point(9))]),
+            z_r_inv: scalar(10),
+            z_r: scalar(11),
+            z_x: scalar(12),
+            z_y: BTreeMap::from([(1usize, scalar(13)), (3usize, scalar(14))]),
+            z_v: scalar(15),
+        };
+        let fixed_points = 5 * POINT_BYTES;
+        let indexed_points = 4 * (USIZE_BYTES + POINT_BYTES);
+        let fixed_scalars = 4 * SCALAR_BYTES;
+        let indexed_scalars = 2 * (USIZE_BYTES + SCALAR_BYTES);
+        assert_eq!(
+            inst2_vector_direct_issue_proof_size(&proof),
+            fixed_points + indexed_points + fixed_scalars + indexed_scalars
+        );
+    }
+
+    #[test]
+    fn inst2_delegatable_issue_proof_counts_all_fields() {
+        let proof = VectorDelegatableIssueProof {
+            a_ev: point(1),
+            a_ez: point(2),
+            a_c: point(3),
+            a_malleable_keys: BTreeMap::from([(1usize, point(4)), (3usize, point(5))]),
+            a_r: point(6),
+            a_r_inv: point(7),
+            a_x: point(8),
+            a_y: BTreeMap::from([(1usize, point(9)), (3usize, point(10))]),
+            z_r_inv: scalar(11),
+            z_r: scalar(12),
+            z_x: scalar(13),
+            z_y: BTreeMap::from([(1usize, scalar(14)), (3usize, scalar(15))]),
+            z_v: scalar(16),
+            z_z: scalar(17),
+        };
+        let fixed_points = 6 * POINT_BYTES;
+        let indexed_points = 4 * (USIZE_BYTES + POINT_BYTES);
+        let fixed_scalars = 5 * SCALAR_BYTES;
+        let indexed_scalars = 2 * (USIZE_BYTES + SCALAR_BYTES);
+        assert_eq!(
+            inst2_vector_delegatable_issue_proof_size(&proof),
+            fixed_points + indexed_points + fixed_scalars + indexed_scalars
         );
     }
 
