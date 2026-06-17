@@ -2,7 +2,8 @@ use crate::instantiation1;
 use crate::instantiation2;
 use crate::zk::{
     SubsetDelegatableIssueProof, SubsetDelegateProof, SubsetDirectIssueProof,
-    VectorDelegateProof, VectorIssueOption3Proof, VectorPresentationProof,
+    VectorDelegatableIssueProof, VectorDelegateProof, VectorDirectIssueProof,
+    VectorPresentationProof,
 };
 
 pub const POINT_BYTES: usize = 32;
@@ -75,7 +76,6 @@ pub fn inst1_obtain_del_output_size(cred: &instantiation1::Credential) -> usize 
 
 pub fn inst2_credential_size(cred: &instantiation2::Credential) -> usize {
     (2 * POINT_BYTES)
-        + (cred.y_power_points.len() * POINT_BYTES)
         + (cred.malleable_keys.len() * (USIZE_BYTES + POINT_BYTES))
         + (cred.message.malleable_indices.len() * USIZE_BYTES)
 }
@@ -87,10 +87,20 @@ pub fn inst2_show_size(show: &instantiation2::Show) -> usize {
         + inst2_vector_presentation_proof_size(&show.proof)
 }
 
-pub fn inst2_vector_issue_proof_size(proof: &VectorIssueOption3Proof) -> usize {
-    (3 * POINT_BYTES)
-        + (proof.a_y_power_points.len() * POINT_BYTES)
-        + (2 * SCALAR_BYTES)
+pub fn inst2_vector_issue_proof_size(proof: &VectorDirectIssueProof) -> usize {
+    (5 * POINT_BYTES)
+        + ((proof.a_malleable_keys.len() + proof.a_y.len()) * (USIZE_BYTES + POINT_BYTES))
+        + (4 * SCALAR_BYTES)
+        + (proof.z_y.len() * (USIZE_BYTES + SCALAR_BYTES))
+}
+
+pub fn inst2_vector_delegatable_issue_proof_size(
+    proof: &VectorDelegatableIssueProof,
+) -> usize {
+    (6 * POINT_BYTES)
+        + ((proof.a_malleable_keys.len() + proof.a_y.len()) * (USIZE_BYTES + POINT_BYTES))
+        + (5 * SCALAR_BYTES)
+        + (proof.z_y.len() * (USIZE_BYTES + SCALAR_BYTES))
 }
 
 pub fn inst2_vector_presentation_proof_size(proof: &VectorPresentationProof) -> usize {
@@ -110,13 +120,12 @@ pub fn inst2_encdel_size(encdel: &instantiation2::EncDel) -> usize {
         .steps
         .iter()
         .map(|step| {
-            (4 * POINT_BYTES)
-                + (step.y_power_points.len() * POINT_BYTES)
+            (3 * POINT_BYTES)
                 + (step.malleable_keys.len() * (USIZE_BYTES + POINT_BYTES))
                 + (step.message.malleable_indices.len() * USIZE_BYTES)
                 + match &step.proof {
                     instantiation2::Inst2DelegationProof::Issue(proof) => {
-                        inst2_vector_issue_proof_size(proof)
+                        inst2_vector_delegatable_issue_proof_size(proof)
                     }
                     instantiation2::Inst2DelegationProof::Delegate(proof) => {
                         inst2_vector_delegate_proof_size(proof)
@@ -128,7 +137,7 @@ pub fn inst2_encdel_size(encdel: &instantiation2::EncDel) -> usize {
 
 pub fn inst2_issue_cred_output_size(
     cred: &instantiation2::Credential,
-    proof: &VectorIssueOption3Proof,
+    proof: &VectorDirectIssueProof,
 ) -> usize {
     inst2_credential_size(cred) + inst2_vector_issue_proof_size(proof)
 }
@@ -197,7 +206,6 @@ mod tests {
         let cred = instantiation2::Credential {
             v_g: point(1),
             c: point(2),
-            y_power_points: vec![point(3), point(4), point(5), point(6)],
             malleable_keys: BTreeMap::from([
                 (0usize, point(3)),
                 (1usize, point(4)),
@@ -211,7 +219,7 @@ mod tests {
         };
         assert_eq!(
             inst2_credential_size(&cred),
-            (2 * POINT_BYTES) + (4 * POINT_BYTES) + (4 * (USIZE_BYTES + POINT_BYTES)) + (4 * USIZE_BYTES)
+            (2 * POINT_BYTES) + (4 * (USIZE_BYTES + POINT_BYTES)) + (4 * USIZE_BYTES)
         );
     }
 
