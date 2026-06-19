@@ -8,7 +8,7 @@ use crate::zk::{
 
 pub const POINT_BYTES: usize = 32;
 pub const SCALAR_BYTES: usize = 32;
-pub const USIZE_BYTES: usize = 8;
+pub const INDEX_BYTES: usize = 8;
 pub const SCALAR_KEY_BYTES: usize = 32;
 
 pub fn inst1_credential_size(cred: &instantiation1::Credential) -> usize {
@@ -17,7 +17,7 @@ pub fn inst1_credential_size(cred: &instantiation1::Credential) -> usize {
 }
 
 pub fn inst1_show_size(show: &instantiation1::Show) -> usize {
-    (2 * POINT_BYTES) + (show.disclosed.len() * SCALAR_BYTES)
+    2 * POINT_BYTES
 }
 
 pub fn inst1_direct_issue_proof_size(proof: &SubsetDirectIssueProof) -> usize {
@@ -75,40 +75,40 @@ pub fn inst1_obtain_del_output_size(cred: &instantiation1::Credential) -> usize 
 }
 
 pub fn inst2_credential_size(cred: &instantiation2::Credential) -> usize {
-    (2 * POINT_BYTES)
-        + (cred.malleable_keys.len() * (USIZE_BYTES + POINT_BYTES))
-        + (cred.message.malleable_indices.len() * USIZE_BYTES)
+    (2 * POINT_BYTES) // we are only intersted in tua
+        // + (cred.malleable_keys.len() * (INDEX_BYTES + POINT_BYTES))
+        // + (cred.message.malleable_indices.len() * INDEX_BYTES)
 }
 
 pub fn inst2_show_size(show: &instantiation2::Show) -> usize {
     (2 * POINT_BYTES)
-        + (show.q_hidden.len() * (USIZE_BYTES + POINT_BYTES))
-        + (show.disclosed.len() * (USIZE_BYTES + SCALAR_BYTES))
+        + (show.q_hidden.len() * (INDEX_BYTES + POINT_BYTES))
+        + (show.disclosed.len() * (INDEX_BYTES + SCALAR_BYTES))
         + inst2_vector_presentation_proof_size(&show.proof)
 }
 
 pub fn inst2_vector_direct_issue_proof_size(proof: &VectorDirectIssueProof) -> usize {
     (5 * POINT_BYTES)
-        + ((proof.a_malleable_keys.len() + proof.a_y.len()) * (USIZE_BYTES + POINT_BYTES))
+        + ((proof.a_malleable_keys.len() + proof.a_y.len()) * (INDEX_BYTES + POINT_BYTES))
         + (4 * SCALAR_BYTES)
-        + (proof.z_y.len() * (USIZE_BYTES + SCALAR_BYTES))
+        + (proof.z_y.len() * (INDEX_BYTES + SCALAR_BYTES))
 }
 
 pub fn inst2_vector_delegatable_issue_proof_size(
     proof: &VectorDelegatableIssueProof,
 ) -> usize {
     (6 * POINT_BYTES)
-        + ((proof.a_malleable_keys.len() + proof.a_y.len()) * (USIZE_BYTES + POINT_BYTES))
+        + ((proof.a_malleable_keys.len() + proof.a_y.len()) * (INDEX_BYTES + POINT_BYTES))
         + (5 * SCALAR_BYTES)
-        + (proof.z_y.len() * (USIZE_BYTES + SCALAR_BYTES))
+        + (proof.z_y.len() * (INDEX_BYTES + SCALAR_BYTES))
 }
 
 pub fn inst2_vector_presentation_proof_size(proof: &VectorPresentationProof) -> usize {
     POINT_BYTES
-        + (proof.a_q.len() * (USIZE_BYTES + POINT_BYTES))
+        + (proof.a_q.len() * (INDEX_BYTES + POINT_BYTES))
         + SCALAR_BYTES
-        + (proof.z_beta.len() * (USIZE_BYTES + SCALAR_BYTES))
-        + (proof.z_s.len() * (USIZE_BYTES + SCALAR_BYTES))
+        + (proof.z_beta.len() * (INDEX_BYTES + SCALAR_BYTES))
+        + (proof.z_s.len() * (INDEX_BYTES + SCALAR_BYTES))
 }
 
 pub fn inst2_vector_delegate_proof_size(_proof: &VectorDelegateProof) -> usize {
@@ -121,8 +121,8 @@ pub fn inst2_encdel_size(encdel: &instantiation2::EncDel) -> usize {
         .iter()
         .map(|step| {
             (3 * POINT_BYTES)
-                + (step.malleable_keys.len() * (USIZE_BYTES + POINT_BYTES))
-                + (step.message.malleable_indices.len() * USIZE_BYTES)
+                + (step.malleable_keys.len() * (INDEX_BYTES + POINT_BYTES))
+                + (step.message.malleable_indices.len() * INDEX_BYTES)
                 + match &step.proof {
                     instantiation2::Inst2DelegationProof::Issue(proof) => {
                         inst2_vector_delegatable_issue_proof_size(proof)
@@ -221,7 +221,7 @@ mod tests {
         };
         assert_eq!(
             inst2_credential_size(&cred),
-            (2 * POINT_BYTES) + (4 * (USIZE_BYTES + POINT_BYTES)) + (4 * USIZE_BYTES)
+            (2 * POINT_BYTES) + (4 * (INDEX_BYTES + POINT_BYTES)) + (4 * INDEX_BYTES)
         );
     }
 
@@ -242,9 +242,9 @@ mod tests {
             z_v: scalar(15),
         };
         let fixed_points = 5 * POINT_BYTES;
-        let indexed_points = 4 * (USIZE_BYTES + POINT_BYTES);
+        let indexed_points = 4 * (INDEX_BYTES + POINT_BYTES);
         let fixed_scalars = 4 * SCALAR_BYTES;
-        let indexed_scalars = 2 * (USIZE_BYTES + SCALAR_BYTES);
+        let indexed_scalars = 2 * (INDEX_BYTES + SCALAR_BYTES);
         assert_eq!(
             inst2_vector_direct_issue_proof_size(&proof),
             fixed_points + indexed_points + fixed_scalars + indexed_scalars
@@ -270,9 +270,9 @@ mod tests {
             z_z: scalar(17),
         };
         let fixed_points = 6 * POINT_BYTES;
-        let indexed_points = 4 * (USIZE_BYTES + POINT_BYTES);
+        let indexed_points = 4 * (INDEX_BYTES + POINT_BYTES);
         let fixed_scalars = 5 * SCALAR_BYTES;
-        let indexed_scalars = 2 * (USIZE_BYTES + SCALAR_BYTES);
+        let indexed_scalars = 2 * (INDEX_BYTES + SCALAR_BYTES);
         assert_eq!(
             inst2_vector_delegatable_issue_proof_size(&proof),
             fixed_points + indexed_points + fixed_scalars + indexed_scalars
@@ -299,7 +299,7 @@ mod tests {
                 z_s: BTreeMap::new(),
             },
         };
-        let expected_show = (2 * POINT_BYTES) + (4 * (USIZE_BYTES + SCALAR_BYTES));
+        let expected_show = (2 * POINT_BYTES) + (4 * (INDEX_BYTES + SCALAR_BYTES));
         let expected_proof = POINT_BYTES + SCALAR_BYTES;
         assert_eq!(inst2_show_size(&show), expected_show + expected_proof);
     }

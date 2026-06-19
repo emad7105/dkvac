@@ -6,8 +6,8 @@ use rand_core::SeedableRng;
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-const ATTR_COUNTS: &[usize] = &[4, 8, 32, 64];
-const DELEGATION_LEVELS: &[usize] = &[0, 3, 6];
+const ATTR_COUNTS: &[usize] = &[4, 32];
+const DELEGATION_LEVELS: &[usize] = &[3];
 
 fn scalar_sequence_1(n: usize) -> Vec<dkvac_core::Scalar> {
     (1..=n).map(|i| dkvac_core::Scalar::from(i as u64)).collect()
