@@ -86,7 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ok = instantiation1::verify_show(&isk, &show)?;
     assert!(ok);
 
-    let (encdel, dk) =
+    let encdel =
         instantiation1::issue_del(&mut rng, &pp, &isk, &ipar, &attributes)?;
 
     let delegated_attributes = vec![
@@ -94,10 +94,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         dkvac_core::Scalar::from(30u64),
     ];
 
-    let (encdel2, dk2) =
-        instantiation1::delegate(&mut rng, &encdel, &dk, &delegated_attributes)?;
+    let encdel2 =
+        instantiation1::delegate(&mut rng, &pp, &encdel, &delegated_attributes)?;
 
-    let delegated_cred = instantiation1::obtain_del(&pp, &ipar, &encdel2, &dk2)?;
+    let delegated_cred = instantiation1::obtain_del(&pp, &ipar, &encdel2)?;
 
     let delegated_show =
         instantiation1::show_cred(&mut rng, &delegated_cred, &delegated_attributes)?;
@@ -111,13 +111,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 Notes:
 
 - `issue_cred` returns a direct credential and its issuance proof.
-- `issue_del` returns an encrypted delegatable chain plus a decryption key scalar.
-- `delegate` returns an updated chain and updated decryption key.
+- `issue_del` returns an `EncDel` containing the public chain and its current secret decryption key.
+- `delegate` returns an updated `EncDel`; previous keys are not copied into its history.
 - `obtain_del` decrypts the final chain state into a normal credential.
 
 ### Instantiation 2
 
-Instantiation 2 authenticates a fixed-length vector of scalar attributes together with a malleable-index set. Delegation can keep the same message, shrink the malleable set, or modify values only at currently malleable indices.
+Instantiation 2 authenticates a fixed-length vector of scalar attributes together with a malleable-index set. Delegation can keep the same message, shrink the malleable set, or modify values only at positions being finalized (`L \\ L_prime`). Retained malleable positions must keep their values.
 
 ```rust
 use dkvac_core::instantiation2;
@@ -156,7 +156,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         instantiation2::verify_show(&pp, &ipar, &isk, &policy, &show)?;
     assert!(ok);
 
-    let (encdel, dk) =
+    let encdel =
         instantiation2::issue_del(&mut rng, &pp, &isk, &ipar, &message)?;
 
     let next_message = instantiation2::Message {
@@ -169,11 +169,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         malleable_indices: BTreeSet::from([2usize]),
     };
 
-    let (encdel2, dk2) =
-        instantiation2::delegate(&mut rng, &pp, &encdel, &dk, &next_message)?;
+    let encdel2 =
+        instantiation2::delegate(&mut rng, &pp, &encdel, &next_message)?;
 
     let delegated_cred =
-        instantiation2::obtain_del(&pp, &ipar, &encdel2, &dk2)?;
+        instantiation2::obtain_del(&pp, &ipar, &encdel2)?;
 
     let delegated_policy = instantiation2::DisclosurePolicy {
         disclosed_indices: BTreeSet::from([0usize, 1usize, 2usize, 3usize]),

@@ -1,5 +1,6 @@
-use crate::group::{Point, Scalar, random_scalar};
+use crate::group::{Point, Scalar, is_identity, random_scalar};
 use crate::instantiation1::ScalarBytes;
+use crate::instantiation2::{Message, is_valid_delegation};
 use merlin::Transcript;
 use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -29,6 +30,8 @@ pub fn transcript_challenge_scalar(transcript: &mut Transcript, label: &'static 
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SubsetDelegateStatement {
+    pub g: Point,
+    pub h: Point,
     pub old_e: Point,
     pub old_ev: Point,
     pub old_ez: Point,
@@ -42,6 +45,7 @@ pub struct SubsetDelegateStatement {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SubsetDelegateWitness {
     pub mu: Scalar,
+    pub z_prime: Scalar,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,6 +55,7 @@ pub struct SubsetDelegateProof {
     pub a_ez: Point,
     pub a_components: BTreeMap<ScalarBytes, Point>,
     pub z_mu: Scalar,
+    pub z_z_prime: Scalar,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -118,9 +123,15 @@ pub struct SubsetDelegatableIssueProof {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VectorDelegateStatement {
+    pub g: Point,
+    pub h: Point,
     pub old_ev: Point,
     pub old_ez: Point,
-    pub old_c_adjusted: Point,
+    pub old_c: Point,
+    pub old_message: Message,
+    pub new_message: Message,
+    pub old_malleable_keys: BTreeMap<usize, Point>,
+    pub new_malleable_keys: BTreeMap<usize, Point>,
     pub new_ev: Point,
     pub new_ez: Point,
     pub new_c: Point,
@@ -129,6 +140,7 @@ pub struct VectorDelegateStatement {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VectorDelegateWitness {
     pub mu: Scalar,
+    pub z_prime: Scalar,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -136,13 +148,18 @@ pub struct VectorDelegateProof {
     pub a_ev: Point,
     pub a_ez: Point,
     pub a_c: Point,
+    pub a_malleable_keys: BTreeMap<usize, Point>,
     pub z_mu: Scalar,
+    pub z_z_prime: Scalar,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VectorPresentationStatement {
+    pub g: Point,
+    pub h: Point,
     pub r_h: Point,
-    pub y_i_points: BTreeMap<usize, Point>,
+    pub r_x_g: Point,
+    pub r_y_i_g: Vec<Point>,
     pub v_prime: Point,
     pub p: Point,
     pub q_hidden: BTreeMap<usize, Point>,
@@ -290,16 +307,17 @@ impl SubsetDelegateProof {
         witness: &SubsetDelegateWitness,
     ) -> Self {
         let rho = random_scalar(rng);
-        let a_e = rho * statement.old_e;
+        let rho_z = random_scalar(rng);
+        let a_e = rho * statement.old_e + rho_z * statement.h;
         let a_ev = rho * statement.old_ev;
-        let a_ez = rho * statement.old_ez;
+        let a_ez = rho * statement.old_ez + rho_z * statement.g;
         let a_components = statement
-            .old_components
-            .iter()
-            .map(|(key, point)| (*key, rho * *point))
+            .new_components
+            .keys()
+            .map(|key| (*key, rho * statement.old_components[key]))
             .collect::<BTreeMap<_, _>>();
 
-        let mut transcript = Transcript::new(b"dkvac-subset-delegate-v1");
+        let mut transcript = Transcript::new(b"dkvac-subset-delegate-v2");
         append_subset_delegate_statement(&mut transcript, statement);
         transcript_append_point(&mut transcript, b"a_e", &a_e);
         transcript_append_point(&mut transcript, b"a_ev", &a_ev);
@@ -316,17 +334,19 @@ impl SubsetDelegateProof {
             a_ez,
             a_components,
             z_mu: rho + c * witness.mu,
+            z_z_prime: rho_z + c * witness.z_prime,
         }
     }
 
     pub fn verify(&self, statement: &SubsetDelegateStatement) -> bool {
-        if statement.old_components.len() != statement.new_components.len()
-            || statement.old_components.len() != self.a_components.len()
+        if is_identity(&statement.new_ev)
+            || statement.new_components.is_empty()
+            || statement.new_components.len() != self.a_components.len()
         {
             return false;
         }
 
-        let mut transcript = Transcript::new(b"dkvac-subset-delegate-v1");
+        let mut transcript = Transcript::new(b"dkvac-subset-delegate-v2");
         append_subset_delegate_statement(&mut transcript, statement);
         transcript_append_point(&mut transcript, b"a_e", &self.a_e);
         transcript_append_point(&mut transcript, b"a_ev", &self.a_ev);
@@ -337,18 +357,22 @@ impl SubsetDelegateProof {
         }
         let c = transcript_challenge_scalar(&mut transcript, b"c");
 
-        if self.z_mu * statement.old_e != self.a_e + c * statement.new_e {
+        if self.z_mu * statement.old_e + self.z_z_prime * statement.h
+            != self.a_e + c * statement.new_e
+        {
             return false;
         }
         if self.z_mu * statement.old_ev != self.a_ev + c * statement.new_ev {
             return false;
         }
-        if self.z_mu * statement.old_ez != self.a_ez + c * statement.new_ez {
+        if self.z_mu * statement.old_ez + self.z_z_prime * statement.g
+            != self.a_ez + c * statement.new_ez
+        {
             return false;
         }
 
-        for (key, old_component) in &statement.old_components {
-            let Some(new_component) = statement.new_components.get(key) else {
+        for (key, new_component) in &statement.new_components {
+            let Some(old_component) = statement.old_components.get(key) else {
                 return false;
             };
             let Some(a_component) = self.a_components.get(key) else {
@@ -383,7 +407,7 @@ impl SubsetDirectIssueProof {
             .map(|(key, c_s)| (*key, rho_y * *c_s))
             .collect::<BTreeMap<_, _>>();
 
-        let mut transcript = Transcript::new(b"dkvac-subset-direct-issue-v1");
+        let mut transcript = Transcript::new(b"dkvac-subset-direct-issue-v2");
         append_subset_direct_issue_statement(&mut transcript, statement);
         append_subset_direct_issue_commitments(
             &mut transcript,
@@ -408,11 +432,14 @@ impl SubsetDirectIssueProof {
     }
 
     pub fn verify(&self, statement: &SubsetDirectIssueStatement) -> bool {
+        if is_identity(&statement.v_x_g) {
+            return false;
+        }
         if statement.components.len() != self.a_components.len() {
             return false;
         }
 
-        let mut transcript = Transcript::new(b"dkvac-subset-direct-issue-v1");
+        let mut transcript = Transcript::new(b"dkvac-subset-direct-issue-v2");
         append_subset_direct_issue_statement(&mut transcript, statement);
         append_subset_direct_issue_commitments(
             &mut transcript,
@@ -475,7 +502,7 @@ impl SubsetDelegatableIssueProof {
             .map(|(key, c_s)| (*key, rho_y * *c_s))
             .collect::<BTreeMap<_, _>>();
 
-        let mut transcript = Transcript::new(b"dkvac-subset-delegatable-issue-v1");
+        let mut transcript = Transcript::new(b"dkvac-subset-delegatable-issue-v2");
         append_subset_delegatable_issue_statement(&mut transcript, statement);
         append_subset_delegatable_issue_commitments(
             &mut transcript,
@@ -503,11 +530,14 @@ impl SubsetDelegatableIssueProof {
     }
 
     pub fn verify(&self, statement: &SubsetDelegatableIssueStatement) -> bool {
+        if is_identity(&statement.ev) {
+            return false;
+        }
         if statement.components.len() != self.a_components.len() {
             return false;
         }
 
-        let mut transcript = Transcript::new(b"dkvac-subset-delegatable-issue-v1");
+        let mut transcript = Transcript::new(b"dkvac-subset-delegatable-issue-v2");
         append_subset_delegatable_issue_statement(&mut transcript, statement);
         append_subset_delegatable_issue_commitments(
             &mut transcript,
@@ -552,43 +582,97 @@ impl SubsetDelegatableIssueProof {
     }
 }
 
+impl VectorDelegateStatement {
+    /// The adjusted MAC base is derived, never supplied independently of the messages/keys.
+    fn adjusted_c(&self) -> Option<Point> {
+        if !is_valid_delegation(&self.old_message, &self.new_message)
+            || !map_keys_match_set(
+                &self.old_malleable_keys,
+                &self.old_message.malleable_indices,
+            )
+            || !map_keys_match_set(
+                &self.new_malleable_keys,
+                &self.new_message.malleable_indices,
+            )
+        {
+            return None;
+        }
+        Some(
+            self.old_message
+                .malleable_indices
+                .difference(&self.new_message.malleable_indices)
+                .fold(self.old_c, |acc, idx| {
+                    acc + (self.new_message.attributes[*idx] - self.old_message.attributes[*idx])
+                        * self.old_malleable_keys[idx]
+                }),
+        )
+    }
+}
+
 impl VectorDelegateProof {
     pub fn prove<R: CryptoRng + RngCore>(
         rng: &mut R,
         statement: &VectorDelegateStatement,
         witness: &VectorDelegateWitness,
     ) -> Self {
+        let adjusted_c = statement
+            .adjusted_c()
+            .expect("valid vector delegation statement");
         let rho = random_scalar(rng);
-        let a_ev = rho * statement.old_ev;
-        let a_ez = rho * statement.old_ez;
-        let a_c = rho * statement.old_c_adjusted;
-
-        let mut transcript = Transcript::new(b"dkvac-vector-delegate-v1");
-        append_vector_delegate_statement(&mut transcript, statement);
-        transcript_append_point(&mut transcript, b"a_ev", &a_ev);
-        transcript_append_point(&mut transcript, b"a_ez", &a_ez);
-        transcript_append_point(&mut transcript, b"a_c", &a_c);
-        let c = transcript_challenge_scalar(&mut transcript, b"c");
-
-        Self {
+        let rho_z = random_scalar(rng);
+        let a_ev = rho * statement.old_ev + rho_z * statement.h;
+        let a_ez = rho * statement.old_ez + rho_z * statement.g;
+        let a_c = rho * adjusted_c;
+        let a_malleable_keys = statement
+            .new_message
+            .malleable_indices
+            .iter()
+            .map(|idx| (*idx, rho * statement.old_malleable_keys[idx]))
+            .collect();
+        let mut proof = Self {
             a_ev,
             a_ez,
             a_c,
-            z_mu: rho + c * witness.mu,
-        }
+            a_malleable_keys,
+            z_mu: Scalar::ZERO,
+            z_z_prime: Scalar::ZERO,
+        };
+        let c = proof.challenge(statement);
+        proof.z_mu = rho + c * witness.mu;
+        proof.z_z_prime = rho_z + c * witness.z_prime;
+        proof
     }
 
-    pub fn verify(&self, statement: &VectorDelegateStatement) -> bool {
-        let mut transcript = Transcript::new(b"dkvac-vector-delegate-v1");
+    fn challenge(&self, statement: &VectorDelegateStatement) -> Scalar {
+        let mut transcript = Transcript::new(b"dkvac-vector-delegate-v2");
         append_vector_delegate_statement(&mut transcript, statement);
         transcript_append_point(&mut transcript, b"a_ev", &self.a_ev);
         transcript_append_point(&mut transcript, b"a_ez", &self.a_ez);
         transcript_append_point(&mut transcript, b"a_c", &self.a_c);
-        let c = transcript_challenge_scalar(&mut transcript, b"c");
+        append_indexed_points(&mut transcript, b"a_malleable_keys", &self.a_malleable_keys);
+        transcript_challenge_scalar(&mut transcript, b"c")
+    }
 
-        self.z_mu * statement.old_ev == self.a_ev + c * statement.new_ev
-            && self.z_mu * statement.old_ez == self.a_ez + c * statement.new_ez
-            && self.z_mu * statement.old_c_adjusted == self.a_c + c * statement.new_c
+    pub fn verify(&self, statement: &VectorDelegateStatement) -> bool {
+        let Some(adjusted_c) = statement.adjusted_c() else {
+            return false;
+        };
+        if !map_keys_match_set(
+            &self.a_malleable_keys,
+            &statement.new_message.malleable_indices,
+        ) {
+            return false;
+        }
+        let c = self.challenge(statement);
+        self.z_mu * statement.old_ev + self.z_z_prime * statement.h
+            == self.a_ev + c * statement.new_ev
+            && self.z_mu * statement.old_ez + self.z_z_prime * statement.g
+                == self.a_ez + c * statement.new_ez
+            && self.z_mu * adjusted_c == self.a_c + c * statement.new_c
+            && statement.new_message.malleable_indices.iter().all(|idx| {
+                self.z_mu * statement.old_malleable_keys[idx]
+                    == self.a_malleable_keys[idx] + c * statement.new_malleable_keys[idx]
+            })
     }
 }
 
@@ -598,9 +682,14 @@ impl VectorPresentationProof {
         statement: &VectorPresentationStatement,
         witness: &VectorPresentationWitness,
     ) -> Self {
+        assert!(
+            statement
+                .q_hidden
+                .keys()
+                .all(|idx| *idx < statement.r_y_i_g.len())
+        );
         let indices = statement.q_hidden.keys().copied().collect::<Vec<_>>();
         assert!(matching_hidden_index_sets(
-            &statement.y_i_points,
             &statement.q_hidden,
             &witness.hidden_attributes,
             &witness.beta,
@@ -615,20 +704,22 @@ impl VectorPresentationProof {
             rho_s.insert(*idx, random_scalar(rng));
         }
 
-        let a_p = indices.iter().fold(-(rho_mu_prime * statement.r_h), |acc, idx| {
-            acc + rho_beta[idx] * statement.y_i_points[idx]
-        });
+        let a_p = indices
+            .iter()
+            .fold(-(rho_mu_prime * statement.r_h), |acc, idx| {
+                acc + rho_beta[idx] * statement.r_y_i_g[*idx]
+            });
         let a_q = indices
             .iter()
             .map(|idx| {
                 (
                     *idx,
-                    rho_s[idx] * statement.v_prime + rho_beta[idx] * crate::group::generator(),
+                    rho_s[idx] * statement.v_prime + rho_beta[idx] * statement.g,
                 )
             })
             .collect::<BTreeMap<_, _>>();
 
-        let mut transcript = Transcript::new(b"dkvac-vector-presentation-v1");
+        let mut transcript = Transcript::new(b"dkvac-vector-presentation-v2");
         append_vector_presentation_statement(&mut transcript, statement);
         transcript_append_point(&mut transcript, b"a_p", &a_p);
         for (idx, point) in &a_q {
@@ -656,12 +747,14 @@ impl VectorPresentationProof {
     }
 
     pub fn verify(&self, statement: &VectorPresentationStatement) -> bool {
-        if !matching_hidden_index_sets(
-            &statement.y_i_points,
-            &statement.q_hidden,
-            &self.z_beta,
-            &self.z_s,
-        ) {
+        if statement
+            .q_hidden
+            .keys()
+            .any(|idx| *idx >= statement.r_y_i_g.len())
+        {
+            return false;
+        }
+        if !matching_hidden_index_sets(&statement.q_hidden, &self.z_beta, &self.z_s) {
             return false;
         }
         if self.a_q.keys().copied().collect::<Vec<_>>()
@@ -671,7 +764,7 @@ impl VectorPresentationProof {
         }
 
         let indices = statement.q_hidden.keys().copied().collect::<Vec<_>>();
-        let mut transcript = Transcript::new(b"dkvac-vector-presentation-v1");
+        let mut transcript = Transcript::new(b"dkvac-vector-presentation-v2");
         append_vector_presentation_statement(&mut transcript, statement);
         transcript_append_point(&mut transcript, b"a_p", &self.a_p);
         for (idx, point) in &self.a_q {
@@ -680,17 +773,18 @@ impl VectorPresentationProof {
         }
         let c = transcript_challenge_scalar(&mut transcript, b"c");
 
-        let lhs_p = indices.iter().fold(-(self.z_mu_prime * statement.r_h), |acc, idx| {
-            acc + self.z_beta[idx] * statement.y_i_points[idx]
-        });
+        let lhs_p = indices
+            .iter()
+            .fold(-(self.z_mu_prime * statement.r_h), |acc, idx| {
+                acc + self.z_beta[idx] * statement.r_y_i_g[*idx]
+            });
         let rhs_p = self.a_p + c * statement.p;
         if lhs_p != rhs_p {
             return false;
         }
 
         for idx in indices {
-            let lhs_q = self.z_s[&idx] * statement.v_prime
-                + self.z_beta[&idx] * crate::group::generator();
+            let lhs_q = self.z_s[&idx] * statement.v_prime + self.z_beta[&idx] * statement.g;
             let rhs_q = self.a_q[&idx] + c * statement.q_hidden[&idx];
             if lhs_q != rhs_q {
                 return false;
@@ -719,10 +813,8 @@ impl VectorDirectIssueProof {
         let rho_r = random_scalar(rng);
         let rho_x = random_scalar(rng);
         let rho_v = random_scalar(rng);
-        let rho_y = statement
-            .malleable_indices
-            .iter()
-            .map(|idx| (*idx, random_scalar(rng)))
+        let rho_y = (0..statement.attributes.len())
+            .map(|idx| (idx, random_scalar(rng)))
             .collect::<BTreeMap<_, _>>();
         let d = vector_issue_d(statement.r_x_g, &statement.r_y_i_g, &statement.attributes);
 
@@ -741,9 +833,8 @@ impl VectorDirectIssueProof {
         let a_r = rho_r * statement.h;
         let a_r_inv = rho_r_inv * statement.r_h;
         let a_x = rho_r_inv * statement.r_x_g - rho_x * statement.g;
-        let a_y = statement
-            .malleable_indices
-            .iter()
+        let a_y = rho_y
+            .keys()
             .map(|idx| {
                 (
                     *idx,
@@ -752,7 +843,7 @@ impl VectorDirectIssueProof {
             })
             .collect::<BTreeMap<_, _>>();
 
-        let mut transcript = Transcript::new(b"dkvac-vector-direct-issue-paper-v1");
+        let mut transcript = Transcript::new(b"dkvac-vector-direct-issue-paper-v2");
         append_vector_direct_issue_statement(&mut transcript, statement);
         append_vector_direct_issue_commitments(
             &mut transcript,
@@ -777,9 +868,8 @@ impl VectorDirectIssueProof {
             z_r_inv: rho_r_inv + challenge * witness.r_inv,
             z_r: rho_r + challenge * witness.r,
             z_x: rho_x + challenge * witness.x,
-            z_y: statement
-                .malleable_indices
-                .iter()
+            z_y: rho_y
+                .keys()
                 .map(|idx| (*idx, rho_y[idx] + challenge * witness.y_powers[idx]))
                 .collect(),
             z_v: rho_v + challenge * witness.v,
@@ -787,6 +877,9 @@ impl VectorDirectIssueProof {
     }
 
     pub fn verify(&self, statement: &VectorDirectIssueStatement) -> bool {
+        if is_identity(&statement.v_g) {
+            return false;
+        }
         if !valid_vector_issue_proof_indices(
             &statement.attributes,
             &statement.r_y_i_g,
@@ -799,7 +892,7 @@ impl VectorDirectIssueProof {
             return false;
         }
 
-        let mut transcript = Transcript::new(b"dkvac-vector-direct-issue-paper-v1");
+        let mut transcript = Transcript::new(b"dkvac-vector-direct-issue-paper-v2");
         append_vector_direct_issue_statement(&mut transcript, statement);
         append_vector_direct_issue_commitments(
             &mut transcript,
@@ -826,13 +919,18 @@ impl VectorDirectIssueProof {
         for idx in &statement.malleable_indices {
             if self.z_r * statement.malleable_keys[idx] - self.z_v * statement.r_y_i_g[*idx]
                 != self.a_malleable_keys[idx]
-                || self.z_r_inv * statement.r_y_i_g[*idx] - self.z_y[idx] * statement.g
-                    != self.a_y[idx]
             {
                 return false;
             }
         }
 
+        for idx in 0..statement.attributes.len() {
+            if self.z_r_inv * statement.r_y_i_g[idx] - self.z_y[&idx] * statement.g
+                != self.a_y[&idx]
+            {
+                return false;
+            }
+        }
         true
     }
 }
@@ -856,10 +954,8 @@ impl VectorDelegatableIssueProof {
         let rho_x = random_scalar(rng);
         let rho_v = random_scalar(rng);
         let rho_z = random_scalar(rng);
-        let rho_y = statement
-            .malleable_indices
-            .iter()
-            .map(|idx| (*idx, random_scalar(rng)))
+        let rho_y = (0..statement.attributes.len())
+            .map(|idx| (idx, random_scalar(rng)))
             .collect::<BTreeMap<_, _>>();
         let d = vector_issue_d(statement.r_x_g, &statement.r_y_i_g, &statement.attributes);
 
@@ -879,9 +975,8 @@ impl VectorDelegatableIssueProof {
         let a_r = rho_r * statement.h;
         let a_r_inv = rho_r_inv * statement.r_h;
         let a_x = rho_r_inv * statement.r_x_g - rho_x * statement.g;
-        let a_y = statement
-            .malleable_indices
-            .iter()
+        let a_y = rho_y
+            .keys()
             .map(|idx| {
                 (
                     *idx,
@@ -890,7 +985,7 @@ impl VectorDelegatableIssueProof {
             })
             .collect::<BTreeMap<_, _>>();
 
-        let mut transcript = Transcript::new(b"dkvac-vector-delegatable-issue-paper-v1");
+        let mut transcript = Transcript::new(b"dkvac-vector-delegatable-issue-paper-v2");
         append_vector_delegatable_issue_statement(&mut transcript, statement);
         append_vector_delegatable_issue_commitments(
             &mut transcript,
@@ -917,9 +1012,8 @@ impl VectorDelegatableIssueProof {
             z_r_inv: rho_r_inv + challenge * witness.r_inv,
             z_r: rho_r + challenge * witness.r,
             z_x: rho_x + challenge * witness.x,
-            z_y: statement
-                .malleable_indices
-                .iter()
+            z_y: rho_y
+                .keys()
                 .map(|idx| (*idx, rho_y[idx] + challenge * witness.y_powers[idx]))
                 .collect(),
             z_v: rho_v + challenge * witness.v,
@@ -940,7 +1034,7 @@ impl VectorDelegatableIssueProof {
             return false;
         }
 
-        let mut transcript = Transcript::new(b"dkvac-vector-delegatable-issue-paper-v1");
+        let mut transcript = Transcript::new(b"dkvac-vector-delegatable-issue-paper-v2");
         append_vector_delegatable_issue_statement(&mut transcript, statement);
         append_vector_delegatable_issue_commitments(
             &mut transcript,
@@ -969,41 +1063,56 @@ impl VectorDelegatableIssueProof {
         for idx in &statement.malleable_indices {
             if self.z_r * statement.malleable_keys[idx] - self.z_v * statement.r_y_i_g[*idx]
                 != self.a_malleable_keys[idx]
-                || self.z_r_inv * statement.r_y_i_g[*idx] - self.z_y[idx] * statement.g
-                    != self.a_y[idx]
             {
                 return false;
             }
         }
 
+        for idx in 0..statement.attributes.len() {
+            if self.z_r_inv * statement.r_y_i_g[idx] - self.z_y[&idx] * statement.g
+                != self.a_y[&idx]
+            {
+                return false;
+            }
+        }
         true
+    }
+}
+
+impl Default for VectorIssueProofPlaceholder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 impl VectorIssueProofPlaceholder {
     pub fn new() -> Self {
         Self {
-            warning: "WARNING: vector issuance proof is not implemented. This placeholder is only for algebraic protocol testing.".to_string(),
+            warning: "WARNING: legacy placeholder: verification is not implemented by this type. Active vector issuance uses exact Schnorr proofs.".to_string(),
         }
     }
 
     pub fn verify(&self) -> bool {
-        // WARNING: vector issuance proof is not implemented.
-        // This placeholder is only for algebraic protocol testing.
+        // Legacy test-only scaffold; not called by the active protocol.
         true
+    }
+}
+
+impl Default for VectorIssuePaperProofPlaceholder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 impl VectorIssuePaperProofPlaceholder {
     pub fn new() -> Self {
         Self {
-            warning: "WARNING: exact paper rel_veciss is not implemented. The updated relation contains non-linear witness products such as rC = vD. Do not use this placeholder for security claims.".to_string(),
+            warning: "WARNING: legacy rel_veciss placeholder; it verifies nothing. Active issuance uses VectorDirectIssueProof and VectorDelegatableIssueProof. Do not use this placeholder for security claims.".to_string(),
         }
     }
 
     pub fn verify(&self) -> bool {
-        // WARNING: exact paper rel_veciss is not implemented.
-        // The updated relation contains non-linear witness products such as rC = vD.
+        // WARNING: legacy placeholder, not used by either active protocol.
         // Do not use this placeholder for security claims.
         true
     }
@@ -1111,6 +1220,13 @@ fn append_subset_delegate_statement(
     transcript: &mut Transcript,
     statement: &SubsetDelegateStatement,
 ) {
+    transcript_append_point(transcript, b"g", &statement.g);
+    transcript_append_point(transcript, b"h", &statement.h);
+    transcript_append_usize(
+        transcript,
+        b"old_components_len",
+        statement.old_components.len(),
+    );
     transcript_append_point(transcript, b"old_e", &statement.old_e);
     transcript_append_point(transcript, b"old_ev", &statement.old_ev);
     transcript_append_point(transcript, b"old_ez", &statement.old_ez);
@@ -1121,6 +1237,11 @@ fn append_subset_delegate_statement(
     transcript_append_point(transcript, b"new_e", &statement.new_e);
     transcript_append_point(transcript, b"new_ev", &statement.new_ev);
     transcript_append_point(transcript, b"new_ez", &statement.new_ez);
+    transcript_append_usize(
+        transcript,
+        b"new_components_len",
+        statement.new_components.len(),
+    );
     for (key, point) in &statement.new_components {
         transcript.append_message(b"new_component_key", &key.0);
         transcript_append_point(transcript, b"new_component_value", point);
@@ -1136,6 +1257,7 @@ fn append_subset_direct_issue_statement(
     transcript_append_point(transcript, b"y_g", &statement.y_g);
     transcript_append_point(transcript, b"v_x_g", &statement.v_x_g);
     transcript_append_point(transcript, b"ev", &statement.ev);
+    transcript_append_usize(transcript, b"components_len", statement.components.len());
     for (key, point) in &statement.components {
         transcript.append_message(b"component_key", &key.0);
         transcript_append_point(transcript, b"component_value", point);
@@ -1171,6 +1293,7 @@ fn append_subset_delegatable_issue_statement(
     transcript_append_point(transcript, b"e", &statement.e);
     transcript_append_point(transcript, b"ev", &statement.ev);
     transcript_append_point(transcript, b"ez", &statement.ez);
+    transcript_append_usize(transcript, b"components_len", statement.components.len());
     for (key, point) in &statement.components {
         transcript.append_message(b"component_key", &key.0);
         transcript_append_point(transcript, b"component_value", point);
@@ -1197,33 +1320,74 @@ fn append_subset_delegatable_issue_commitments(
     }
 }
 
+fn append_indexed_points(
+    transcript: &mut Transcript,
+    label: &'static [u8],
+    points: &BTreeMap<usize, Point>,
+) {
+    transcript_append_usize(transcript, label, points.len());
+    for (idx, point) in points {
+        transcript_append_usize(transcript, b"index", *idx);
+        transcript_append_point(transcript, b"point", point);
+    }
+}
+
+fn append_message(transcript: &mut Transcript, label: &'static [u8], message: &Message) {
+    transcript_append_usize(transcript, label, message.attributes.len());
+    for value in &message.attributes {
+        transcript_append_scalar(transcript, b"attribute", value);
+    }
+    transcript_append_usize(
+        transcript,
+        b"malleable_len",
+        message.malleable_indices.len(),
+    );
+    for idx in &message.malleable_indices {
+        transcript_append_usize(transcript, b"malleable_idx", *idx);
+    }
+}
+
 fn append_vector_delegate_statement(
     transcript: &mut Transcript,
     statement: &VectorDelegateStatement,
 ) {
+    transcript_append_point(transcript, b"g", &statement.g);
+    transcript_append_point(transcript, b"h", &statement.h);
     transcript_append_point(transcript, b"old_ev", &statement.old_ev);
     transcript_append_point(transcript, b"old_ez", &statement.old_ez);
-    transcript_append_point(transcript, b"old_c_adjusted", &statement.old_c_adjusted);
+    transcript_append_point(transcript, b"old_c", &statement.old_c);
     transcript_append_point(transcript, b"new_ev", &statement.new_ev);
     transcript_append_point(transcript, b"new_ez", &statement.new_ez);
     transcript_append_point(transcript, b"new_c", &statement.new_c);
+    append_message(transcript, b"old_message", &statement.old_message);
+    append_message(transcript, b"new_message", &statement.new_message);
+    append_indexed_points(
+        transcript,
+        b"old_malleable_keys",
+        &statement.old_malleable_keys,
+    );
+    append_indexed_points(
+        transcript,
+        b"new_malleable_keys",
+        &statement.new_malleable_keys,
+    );
 }
 
 fn append_vector_presentation_statement(
     transcript: &mut Transcript,
     statement: &VectorPresentationStatement,
 ) {
+    transcript_append_point(transcript, b"g", &statement.g);
+    transcript_append_point(transcript, b"h", &statement.h);
     transcript_append_point(transcript, b"r_h", &statement.r_h);
-    for (idx, point) in &statement.y_i_points {
-        transcript_append_usize(transcript, b"y_idx", *idx);
-        transcript_append_point(transcript, b"y_point", point);
+    transcript_append_point(transcript, b"r_x_g", &statement.r_x_g);
+    transcript_append_usize(transcript, b"r_y_i_len", statement.r_y_i_g.len());
+    for point in &statement.r_y_i_g {
+        transcript_append_point(transcript, b"r_y_i_g", point);
     }
     transcript_append_point(transcript, b"v_prime", &statement.v_prime);
     transcript_append_point(transcript, b"p", &statement.p);
-    for (idx, point) in &statement.q_hidden {
-        transcript_append_usize(transcript, b"q_idx", *idx);
-        transcript_append_point(transcript, b"q_point", point);
-    }
+    append_indexed_points(transcript, b"q_hidden", &statement.q_hidden);
 }
 
 fn append_vector_direct_issue_statement(
@@ -1272,6 +1436,10 @@ fn append_vector_issue_common_statement(
     malleable_keys: &BTreeMap<usize, Point>,
     malleable_indices: &BTreeSet<usize>,
 ) {
+    transcript_append_usize(transcript, b"r_y_i_len", r_y_i_g.len());
+    transcript_append_usize(transcript, b"attributes_len", attributes.len());
+    transcript_append_usize(transcript, b"malleable_len", malleable_indices.len());
+    transcript_append_usize(transcript, b"malleable_keys_len", malleable_keys.len());
     for (idx, point) in r_y_i_g.iter().enumerate() {
         transcript_append_usize(transcript, b"r_y_i_idx", idx);
         transcript_append_point(transcript, b"r_y_i_g", point);
@@ -1289,6 +1457,8 @@ fn append_vector_issue_common_statement(
     }
 }
 
+// Keep the named mathematical commitments explicit at both prover and verifier.
+#[allow(clippy::too_many_arguments)]
 fn append_vector_direct_issue_commitments(
     transcript: &mut Transcript,
     a_v: &Point,
@@ -1311,6 +1481,7 @@ fn append_vector_direct_issue_commitments(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn append_vector_delegatable_issue_commitments(
     transcript: &mut Transcript,
     a_ev: &Point,
@@ -1396,17 +1567,15 @@ fn append_vector_issue_option3_commitments(
     }
 }
 
-fn matching_hidden_index_sets<T, U, V, W>(
-    y_i_points: &BTreeMap<usize, T>,
+fn matching_hidden_index_sets<U, V, W>(
     q_hidden: &BTreeMap<usize, U>,
     hidden_attributes: &BTreeMap<usize, V>,
     beta: &BTreeMap<usize, W>,
 ) -> bool {
-    let y_keys = y_i_points.keys().copied().collect::<Vec<_>>();
     let q_keys = q_hidden.keys().copied().collect::<Vec<_>>();
     let s_keys = hidden_attributes.keys().copied().collect::<Vec<_>>();
     let b_keys = beta.keys().copied().collect::<Vec<_>>();
-    y_keys == q_keys && q_keys == s_keys && s_keys == b_keys
+    q_keys == s_keys && s_keys == b_keys
 }
 
 fn valid_vector_issue_indices<T>(
@@ -1419,7 +1588,7 @@ fn valid_vector_issue_indices<T>(
     attributes.len() == r_y_i_g.len()
         && malleable_indices.iter().all(|idx| *idx < attributes.len())
         && map_keys_match_set(malleable_keys, malleable_indices)
-        && map_keys_match_set(y_powers, malleable_indices)
+        && y_powers.keys().copied().eq(0..attributes.len())
 }
 
 fn valid_vector_issue_proof_indices<T, U, V>(
@@ -1435,8 +1604,8 @@ fn valid_vector_issue_proof_indices<T, U, V>(
         && malleable_indices.iter().all(|idx| *idx < attributes.len())
         && map_keys_match_set(malleable_keys, malleable_indices)
         && map_keys_match_set(a_malleable_keys, malleable_indices)
-        && map_keys_match_set(a_y, malleable_indices)
-        && map_keys_match_set(z_y, malleable_indices)
+        && a_y.keys().copied().eq(0..attributes.len())
+        && z_y.keys().copied().eq(0..attributes.len())
 }
 
 fn map_keys_match_set<T>(map: &BTreeMap<usize, T>, indices: &BTreeSet<usize>) -> bool {
@@ -1484,6 +1653,8 @@ mod tests {
             .map(|(k, v)| (*k, mu * *v))
             .collect::<BTreeMap<_, _>>();
         let statement = SubsetDelegateStatement {
+            g: generator(),
+            h: point(17),
             old_e: point(2),
             old_ev: point(3),
             old_ez: point(5),
@@ -1493,7 +1664,10 @@ mod tests {
             new_ez: mu * point(5),
             new_components,
         };
-        let witness = SubsetDelegateWitness { mu };
+        let witness = SubsetDelegateWitness {
+            mu,
+            z_prime: Scalar::ZERO,
+        };
         let proof = SubsetDelegateProof::prove(&mut rng, &statement, &witness);
         assert!(proof.verify(&statement));
     }
@@ -1509,6 +1683,8 @@ mod tests {
             .collect::<BTreeMap<_, _>>();
         new_components.insert(key(2), new_components[&key(2)] + point(1));
         let statement = SubsetDelegateStatement {
+            g: generator(),
+            h: point(17),
             old_e: point(2),
             old_ev: point(3),
             old_ez: point(5),
@@ -1521,6 +1697,8 @@ mod tests {
         let proof = SubsetDelegateProof::prove(
             &mut rng,
             &SubsetDelegateStatement {
+                g: generator(),
+                h: point(17),
                 old_e: statement.old_e,
                 old_ev: statement.old_ev,
                 old_ez: statement.old_ez,
@@ -1534,7 +1712,10 @@ mod tests {
                     .map(|(k, v)| (*k, mu * *v))
                     .collect(),
             },
-            &SubsetDelegateWitness { mu },
+            &SubsetDelegateWitness {
+                mu,
+                z_prime: Scalar::ZERO,
+            },
         );
         assert!(!proof.verify(&statement));
     }
@@ -1546,12 +1727,31 @@ mod tests {
         let statement = VectorDelegateStatement {
             old_ev: point(4),
             old_ez: point(6),
-            old_c_adjusted: point(8),
+            old_c: point(8),
+            g: generator(),
+            h: point(17),
+            old_message: Message {
+                attributes: vec![scalar(1)],
+                malleable_indices: BTreeSet::new(),
+            },
+            new_message: Message {
+                attributes: vec![scalar(1)],
+                malleable_indices: BTreeSet::new(),
+            },
+            old_malleable_keys: BTreeMap::new(),
+            new_malleable_keys: BTreeMap::new(),
             new_ev: mu * point(4),
             new_ez: mu * point(6),
             new_c: mu * point(8),
         };
-        let proof = VectorDelegateProof::prove(&mut rng, &statement, &VectorDelegateWitness { mu });
+        let proof = VectorDelegateProof::prove(
+            &mut rng,
+            &statement,
+            &VectorDelegateWitness {
+                mu,
+                z_prime: Scalar::ZERO,
+            },
+        );
         assert!(proof.verify(&statement));
     }
 
@@ -1562,13 +1762,31 @@ mod tests {
         let valid_statement = VectorDelegateStatement {
             old_ev: point(4),
             old_ez: point(6),
-            old_c_adjusted: point(8),
+            old_c: point(8),
+            g: generator(),
+            h: point(17),
+            old_message: Message {
+                attributes: vec![scalar(1)],
+                malleable_indices: BTreeSet::new(),
+            },
+            new_message: Message {
+                attributes: vec![scalar(1)],
+                malleable_indices: BTreeSet::new(),
+            },
+            old_malleable_keys: BTreeMap::new(),
+            new_malleable_keys: BTreeMap::new(),
             new_ev: mu * point(4),
             new_ez: mu * point(6),
             new_c: mu * point(8),
         };
-        let proof =
-            VectorDelegateProof::prove(&mut rng, &valid_statement, &VectorDelegateWitness { mu });
+        let proof = VectorDelegateProof::prove(
+            &mut rng,
+            &valid_statement,
+            &VectorDelegateWitness {
+                mu,
+                z_prime: Scalar::ZERO,
+            },
+        );
         let bad_statement = VectorDelegateStatement {
             new_c: valid_statement.new_c + point(1),
             ..valid_statement
@@ -1586,8 +1804,7 @@ mod tests {
         assert_ne!(challenge, Scalar::ZERO);
     }
 
-    fn subset_direct_issue_fixture(
-    ) -> (SubsetDirectIssueStatement, SubsetDirectIssueWitness) {
+    fn subset_direct_issue_fixture() -> (SubsetDirectIssueStatement, SubsetDirectIssueWitness) {
         let g = generator();
         let x = scalar(5);
         let y = scalar(7);
@@ -1617,8 +1834,10 @@ mod tests {
         )
     }
 
-    fn subset_delegatable_issue_fixture(
-    ) -> (SubsetDelegatableIssueStatement, SubsetDelegatableIssueWitness) {
+    fn subset_delegatable_issue_fixture() -> (
+        SubsetDelegatableIssueStatement,
+        SubsetDelegatableIssueWitness,
+    ) {
         let g = generator();
         let h = point(17);
         let x = scalar(5);
@@ -1680,7 +1899,10 @@ mod tests {
         let proof = SubsetDirectIssueProof::prove(&mut rng, &statement, &witness);
         let mut bad_statement = statement.clone();
         let target = ScalarBytes(scalar(2).to_bytes());
-        *bad_statement.components.get_mut(&target).expect("component") += point(1);
+        *bad_statement
+            .components
+            .get_mut(&target)
+            .expect("component") += point(1);
         assert!(!proof.verify(&bad_statement));
     }
 
@@ -1711,14 +1933,14 @@ mod tests {
         let proof = SubsetDelegatableIssueProof::prove(&mut rng, &statement, &witness);
         let mut bad_statement = statement.clone();
         let target = ScalarBytes(scalar(4).to_bytes());
-        *bad_statement.components.get_mut(&target).expect("component") += point(1);
+        *bad_statement
+            .components
+            .get_mut(&target)
+            .expect("component") += point(1);
         assert!(!proof.verify(&bad_statement));
     }
 
-    fn vector_presentation_fixture() -> (
-        VectorPresentationStatement,
-        VectorPresentationWitness,
-    ) {
+    fn vector_presentation_fixture() -> (VectorPresentationStatement, VectorPresentationWitness) {
         let r_h = point(5);
         let v_prime = point(7);
         let hidden_attributes = BTreeMap::from([(1usize, scalar(11)), (3usize, scalar(13))]);
@@ -1730,11 +1952,16 @@ mod tests {
             .collect::<BTreeMap<_, _>>();
         let p = y_i_points
             .iter()
-            .fold(-(scalar(31) * r_h), |acc, (idx, y_i)| acc + beta[idx] * *y_i);
+            .fold(-(scalar(31) * r_h), |acc, (idx, y_i)| {
+                acc + beta[idx] * *y_i
+            });
         (
             VectorPresentationStatement {
+                g: generator(),
+                h: point(17),
+                r_x_g: point(31),
                 r_h,
-                y_i_points,
+                r_y_i_g: vec![point(2), point(23), point(3), point(29)],
                 v_prime,
                 p,
                 q_hidden,
@@ -1765,20 +1992,26 @@ mod tests {
             &vector_presentation_fixture().0,
             &vector_presentation_fixture().1,
         );
-        assert!(!proof.verify(&VectorPresentationStatement {
-            q_hidden: statement
-                .q_hidden
-                .iter()
-                .map(|(idx, point)| {
-                    if *idx == 1 {
-                        (*idx, witness.hidden_attributes[idx] * statement.v_prime + witness.beta[idx] * generator())
-                    } else {
-                        (*idx, *point)
-                    }
-                })
-                .collect(),
-            ..statement
-        }));
+        assert!(
+            !proof.verify(&VectorPresentationStatement {
+                q_hidden: statement
+                    .q_hidden
+                    .iter()
+                    .map(|(idx, point)| {
+                        if *idx == 1 {
+                            (
+                                *idx,
+                                witness.hidden_attributes[idx] * statement.v_prime
+                                    + witness.beta[idx] * generator(),
+                            )
+                        } else {
+                            (*idx, *point)
+                        }
+                    })
+                    .collect(),
+                ..statement
+            })
+        );
     }
 
     #[test]
@@ -1787,7 +2020,9 @@ mod tests {
         let (statement, witness) = vector_presentation_fixture();
         let proof = VectorPresentationProof::prove(&mut rng, &statement, &witness);
         let mut bad_statement = statement.clone();
-        bad_statement.q_hidden.insert(1, bad_statement.q_hidden[&1] + point(1));
+        bad_statement
+            .q_hidden
+            .insert(1, bad_statement.q_hidden[&1] + point(1));
         assert!(!proof.verify(&bad_statement));
     }
 
@@ -1823,9 +2058,10 @@ mod tests {
         let attributes = vec![scalar(2), scalar(4), scalar(6)];
         let malleable_indices = BTreeSet::from([0usize, 2usize]);
         let all_y_powers = [scalar(7), scalar(13), scalar(19)];
-        let y_powers = malleable_indices
+        let y_powers = all_y_powers
             .iter()
-            .map(|idx| (*idx, all_y_powers[*idx]))
+            .copied()
+            .enumerate()
             .collect::<BTreeMap<_, _>>();
         let r_x_g = r * (x * g);
         let r_y_i_g = all_y_powers
@@ -1982,6 +2218,322 @@ mod tests {
         let proof = VectorIssuePaperProofPlaceholder::new();
         assert!(proof.verify());
         assert!(proof.warning.contains("rel_veciss"));
-        assert!(proof.warning.contains("non-linear"));
+        assert!(proof.warning.contains("legacy"));
+    }
+
+    #[test]
+    fn v2_subset_issuance_rejects_algebraically_consistent_zero_tags() {
+        let mut rng = ChaCha20Rng::from_seed([41; 32]);
+        let (mut s, mut w) = subset_direct_issue_fixture();
+        w.v = Scalar::ZERO;
+        s.v_x_g = Point::default();
+        s.ev = Point::default();
+        s.components
+            .values_mut()
+            .for_each(|p| *p = Point::default());
+        assert!(!SubsetDirectIssueProof::prove(&mut rng, &s, &w).verify(&s));
+        let (mut s, mut w) = subset_delegatable_issue_fixture();
+        w.v = Scalar::ZERO;
+        s.e = w.z * s.h;
+        s.ev = Point::default();
+        s.components
+            .values_mut()
+            .for_each(|p| *p = Point::default());
+        assert!(!SubsetDelegatableIssueProof::prove(&mut rng, &s, &w).verify(&s));
+    }
+
+    fn subset_v2_fixture(mu: Scalar) -> (SubsetDelegateStatement, SubsetDelegateWitness) {
+        let z_prime = scalar(13);
+        (
+            SubsetDelegateStatement {
+                g: generator(),
+                h: point(17),
+                old_e: point(2),
+                old_ev: point(3),
+                old_ez: point(5),
+                old_components: BTreeMap::from([(key(1), point(11)), (key(2), point(19))]),
+                new_e: mu * point(2) + z_prime * point(17),
+                new_ev: mu * point(3),
+                new_ez: mu * point(5) + z_prime * generator(),
+                new_components: BTreeMap::from([(key(1), mu * point(11))]),
+            },
+            SubsetDelegateWitness { mu, z_prime },
+        )
+    }
+
+    #[test]
+    fn v2_subset_delegation_masks_and_binds_dropped_components() {
+        let mut rng = ChaCha20Rng::from_seed([42; 32]);
+        let (s, w) = subset_v2_fixture(scalar(7));
+        let proof = SubsetDelegateProof::prove(&mut rng, &s, &w);
+        assert!(proof.verify(&s));
+        assert_eq!(proof.a_components.len(), 1);
+        for field in 0..7 {
+            let mut bad = s.clone();
+            match field {
+                0 => bad.new_e += generator(),
+                1 => bad.new_ev += generator(),
+                2 => bad.new_ez += generator(),
+                3 => *bad.old_components.get_mut(&key(2)).unwrap() += generator(),
+                4 => bad.h += generator(),
+                5 => bad.g += generator(),
+                _ => {
+                    bad.new_components.insert(key(3), point(11));
+                }
+            }
+            assert!(!proof.verify(&bad), "mutation {field}");
+        }
+        let mut bad = proof.clone();
+        bad.z_z_prime += Scalar::ONE;
+        assert!(!bad.verify(&s));
+        let mut bad = proof.clone();
+        bad.z_mu += Scalar::ONE;
+        assert!(!bad.verify(&s));
+        let mut bad = proof.clone();
+        bad.a_components.insert(key(3), point(1));
+        assert!(!bad.verify(&s));
+    }
+
+    #[test]
+    fn v2_subset_delegation_rejects_zero_scaling_even_with_valid_mask() {
+        let mut rng = ChaCha20Rng::from_seed([43; 32]);
+        let (s, w) = subset_v2_fixture(Scalar::ZERO);
+        assert!(!SubsetDelegateProof::prove(&mut rng, &s, &w).verify(&s));
+    }
+
+    fn vector_v2_fixture() -> (VectorDelegateStatement, VectorDelegateWitness) {
+        let mu = scalar(7);
+        let z_prime = scalar(13);
+        let old_message = Message {
+            attributes: vec![scalar(2), scalar(3)],
+            malleable_indices: BTreeSet::from([0, 1]),
+        };
+        let new_message = Message {
+            attributes: vec![scalar(5), scalar(3)],
+            malleable_indices: BTreeSet::from([1]),
+        };
+        (
+            VectorDelegateStatement {
+                g: generator(),
+                h: point(17),
+                old_ev: point(2),
+                old_ez: point(3),
+                old_c: point(5),
+                old_message,
+                new_message,
+                old_malleable_keys: BTreeMap::from([(0, point(11)), (1, point(19))]),
+                new_malleable_keys: BTreeMap::from([(1, mu * point(19))]),
+                new_ev: mu * point(2) + z_prime * point(17),
+                new_ez: mu * point(3) + z_prime * generator(),
+                new_c: mu * (point(5) + scalar(3) * point(11)),
+            },
+            VectorDelegateWitness { mu, z_prime },
+        )
+    }
+
+    #[test]
+    fn v2_vector_delegation_proves_retained_keys_with_shared_mu() {
+        let mut rng = ChaCha20Rng::from_seed([44; 32]);
+        let (s, w) = vector_v2_fixture();
+        let proof = VectorDelegateProof::prove(&mut rng, &s, &w);
+        assert!(proof.verify(&s));
+        for field in 0..10 {
+            let mut bad = s.clone();
+            match field {
+                0 => *bad.new_malleable_keys.get_mut(&1).unwrap() += generator(),
+                1 => *bad.old_malleable_keys.get_mut(&1).unwrap() += generator(),
+                2 => bad.new_ev += generator(),
+                3 => bad.new_ez += generator(),
+                4 => bad.h += generator(),
+                5 => bad.new_message.attributes[1] += Scalar::ONE,
+                // Change both values so admissibility and adjusted C remain unchanged:
+                // only binding the full messages catches this.
+                6 => {
+                    bad.old_message.attributes[1] += Scalar::ONE;
+                    bad.new_message.attributes[1] += Scalar::ONE;
+                }
+                7 => {
+                    bad.new_malleable_keys.remove(&1);
+                }
+                8 => {
+                    bad.new_malleable_keys.insert(2, point(1));
+                }
+                _ => {
+                    bad.old_message.malleable_indices.insert(99);
+                }
+            }
+            assert!(!proof.verify(&bad), "mutation {field}");
+        }
+        let mut bad = proof.clone();
+        bad.z_z_prime += Scalar::ONE;
+        assert!(!bad.verify(&s));
+        let mut bad = proof.clone();
+        bad.z_mu += Scalar::ONE;
+        assert!(!bad.verify(&s));
+        for mode in 0..3 {
+            let mut bad = proof.clone();
+            match mode {
+                0 => {
+                    bad.a_malleable_keys.clear();
+                }
+                1 => {
+                    bad.a_malleable_keys.insert(2, point(1));
+                }
+                _ => {
+                    let p = bad.a_malleable_keys.remove(&1).unwrap();
+                    bad.a_malleable_keys.insert(0, p);
+                }
+            }
+            assert!(!bad.verify(&s));
+        }
+        // Produce a fresh proof after changing a retained key, so the transcript is
+        // internally consistent: the shared-scalar equation itself must reject it.
+        let mut bad = s.clone();
+        *bad.new_malleable_keys.get_mut(&1).unwrap() += generator();
+        assert!(!VectorDelegateProof::prove(&mut rng, &bad, &w).verify(&bad));
+    }
+
+    #[test]
+    fn v2_vector_issuance_full_coefficient_domain_for_empty_partial_full_l() {
+        let mut rng = ChaCha20Rng::from_seed([45; 32]);
+        for indices in [
+            BTreeSet::new(),
+            BTreeSet::from([0, 2]),
+            BTreeSet::from([0, 1, 2]),
+        ] {
+            let (mut direct, w) = vector_direct_issue_fixture();
+            direct.malleable_indices = indices.clone();
+            direct.malleable_keys = indices
+                .iter()
+                .map(|i| (*i, w.v * w.y_powers[i] * direct.g))
+                .collect();
+            let p = VectorDirectIssueProof::prove(&mut rng, &direct, &w);
+            assert!(p.verify(&direct));
+            assert_eq!(p.a_malleable_keys.len(), indices.len());
+            assert_eq!(p.a_y.len(), 3);
+            assert_eq!(p.z_y.len(), 3);
+            let (mut encrypted, ew) = vector_delegatable_issue_fixture();
+            encrypted.malleable_indices = indices;
+            encrypted.malleable_keys = direct.malleable_keys.clone();
+            let ep = VectorDelegatableIssueProof::prove(&mut rng, &encrypted, &ew);
+            assert!(ep.verify(&encrypted));
+            assert_eq!(ep.a_y.len(), 3);
+            assert_eq!(ep.z_y.len(), 3);
+            for mode in 0..4 {
+                let mut bad = p.clone();
+                let mut ebad = ep.clone();
+                match mode {
+                    0 => {
+                        bad.z_y.remove(&1);
+                        ebad.z_y.remove(&1);
+                    }
+                    1 => {
+                        bad.a_y.remove(&1);
+                        ebad.a_y.remove(&1);
+                    }
+                    2 => {
+                        *bad.z_y.get_mut(&1).unwrap() += Scalar::ONE;
+                        *ebad.z_y.get_mut(&1).unwrap() += Scalar::ONE;
+                    }
+                    _ => {
+                        let v = bad.z_y.remove(&1).unwrap();
+                        bad.z_y.insert(99, v);
+                        let v = ebad.z_y.remove(&1).unwrap();
+                        ebad.z_y.insert(99, v);
+                    }
+                }
+                assert!(!bad.verify(&direct));
+                assert!(!ebad.verify(&encrypted));
+            }
+        }
+    }
+
+    #[test]
+    fn v2_vector_direct_zero_plaintext_rejected_encrypted_relation_allows_it() {
+        let mut rng = ChaCha20Rng::from_seed([46; 32]);
+        let (mut s, mut w) = vector_direct_issue_fixture();
+        w.v = Scalar::ZERO;
+        s.v_g = Point::default();
+        s.c = Point::default();
+        s.malleable_keys
+            .values_mut()
+            .for_each(|p| *p = Point::default());
+        assert!(!VectorDirectIssueProof::prove(&mut rng, &s, &w).verify(&s));
+        let (mut s, mut w) = vector_delegatable_issue_fixture();
+        w.v = Scalar::ZERO;
+        s.ev = w.z * s.h;
+        s.c = Point::default();
+        s.malleable_keys
+            .values_mut()
+            .for_each(|p| *p = Point::default());
+        assert!(VectorDelegatableIssueProof::prove(&mut rng, &s, &w).verify(&s));
+    }
+
+    #[test]
+    fn v2_presentation_binds_complete_issuer_and_public_parameters() {
+        let mut rng = ChaCha20Rng::from_seed([47; 32]);
+        let (s, w) = vector_presentation_fixture();
+        let p = VectorPresentationProof::prove(&mut rng, &s, &w);
+        for mode in 0..5 {
+            let mut bad = s.clone();
+            match mode {
+                0 => bad.r_x_g += generator(),
+                1 => bad.r_y_i_g[0] += generator(), // disclosed coefficient, absent from equations
+                2 => bad.h += generator(),
+                3 => bad.g += generator(),
+                _ => {
+                    bad.q_hidden.insert(99, point(1));
+                }
+            }
+            assert!(!p.verify(&bad));
+        }
+    }
+
+    #[test]
+    fn v2_rejects_legacy_subset_direct_proof_domain() {
+        let mut rng = ChaCha20Rng::from_seed([48; 32]);
+        let (s, w) = subset_direct_issue_fixture();
+        let rx = random_scalar(&mut rng);
+        let ry = random_scalar(&mut rng);
+        let rv = random_scalar(&mut rng);
+        let mut p = SubsetDirectIssueProof {
+            a_x: rx * s.g,
+            a_y: ry * s.g,
+            a_ev: rv * s.g,
+            a_v: rv * s.x_g,
+            a_components: s.components.iter().map(|(k, p)| (*k, ry * p)).collect(),
+            z_x: Scalar::ZERO,
+            z_y: Scalar::ZERO,
+            z_v: Scalar::ZERO,
+        };
+        // Exact v1 transcript: no collection lengths, and the old domain.
+        let mut t = Transcript::new(b"dkvac-subset-direct-issue-v1");
+        for (label, point) in [
+            (b"g".as_slice(), s.g),
+            (b"x_g", s.x_g),
+            (b"y_g", s.y_g),
+            (b"v_x_g", s.v_x_g),
+            (b"ev", s.ev),
+        ] {
+            transcript_append_point(&mut t, label, &point);
+        }
+        for (key, point) in &s.components {
+            t.append_message(b"component_key", &key.0);
+            transcript_append_point(&mut t, b"component_value", point);
+        }
+        append_subset_direct_issue_commitments(
+            &mut t,
+            &p.a_x,
+            &p.a_y,
+            &p.a_ev,
+            &p.a_v,
+            &p.a_components,
+        );
+        let c = transcript_challenge_scalar(&mut t, b"c");
+        p.z_x = rx + c * w.x;
+        p.z_y = ry + c * w.y;
+        p.z_v = rv + c * w.v;
+        assert_eq!(p.z_v * s.g, p.a_ev + c * s.ev);
+        assert!(!p.verify(&s));
     }
 }

@@ -10,7 +10,9 @@ const ATTR_COUNTS: &[usize] = &[4, 32];
 const DELEGATION_LEVELS: &[usize] = &[3];
 
 fn scalar_sequence_1(n: usize) -> Vec<dkvac_core::Scalar> {
-    (1..=n).map(|i| dkvac_core::Scalar::from(i as u64)).collect()
+    (1..=n)
+        .map(|i| dkvac_core::Scalar::from(i as u64))
+        .collect()
 }
 
 fn inst2_message(n: usize) -> instantiation2::Message {
@@ -33,9 +35,8 @@ fn bench_inst1(c: &mut Criterion) {
             instantiation1::issue_cred(&mut rng, &pp, &isk, &ipar, &attrs).expect("issue");
         let obtained_cred =
             instantiation1::obtain_cred(&ipar, &attrs, cred.clone(), &proof).expect("obtain");
-        let show =
-            instantiation1::show_cred(&mut rng, &obtained_cred, &disclosed).expect("show");
-        let (encdel, dk) =
+        let show = instantiation1::show_cred(&mut rng, &obtained_cred, &disclosed).expect("show");
+        let encdel =
             instantiation1::issue_del(&mut rng, &pp, &isk, &ipar, &attrs).expect("issue del");
 
         group.bench_with_input(BenchmarkId::new("issue_cred", n), &n, |b, _| {
@@ -71,34 +72,28 @@ fn bench_inst1(c: &mut Criterion) {
 
         for &d in DELEGATION_LEVELS {
             let mut chain = encdel.clone();
-            let mut chain_dk = dk;
-            for _ in 0..d {
-                let (next_chain, next_dk) =
-                    instantiation1::delegate(&mut rng, &chain, &chain_dk, &attrs).expect("delegate");
+
+            assert!(d > 0, "delegation benchmark depth is its output depth");
+            for _ in 1..d {
+                let next_chain =
+                    instantiation1::delegate(&mut rng, &pp, &chain, &attrs).expect("delegate");
                 chain = next_chain;
-                chain_dk = next_dk;
             }
 
-            group.bench_with_input(
-                BenchmarkId::new(format!("delegate_d{d}"), n),
-                &n,
-                |b, _| {
-                    b.iter(|| {
-                        let mut rng = ChaCha20Rng::from_seed([14u8; 32]);
-                        instantiation1::delegate(&mut rng, &chain, &chain_dk, &attrs)
-                            .expect("delegate")
-                    });
-                },
-            );
+            group.bench_with_input(BenchmarkId::new(format!("delegate_d{d}"), n), &n, |b, _| {
+                b.iter(|| {
+                    let mut rng = ChaCha20Rng::from_seed([14u8; 32]);
+                    instantiation1::delegate(&mut rng, &pp, &chain, &attrs).expect("delegate")
+                });
+            });
 
+            let chain = instantiation1::delegate(&mut rng, &pp, &chain, &attrs)
+                .expect("output-depth chain");
             group.bench_with_input(
                 BenchmarkId::new(format!("obtain_del_d{d}"), n),
                 &n,
                 |b, _| {
-                    b.iter(|| {
-                        instantiation1::obtain_del(&pp, &ipar, &chain, &chain_dk)
-                            .expect("obtain del")
-                    });
+                    b.iter(|| instantiation1::obtain_del(&pp, &ipar, &chain).expect("obtain del"));
                 },
             );
         }
@@ -120,12 +115,12 @@ fn bench_inst2(c: &mut Criterion) {
         };
         let (cred, proof) =
             instantiation2::issue_cred(&mut rng, &pp, &isk, &ipar, &message).expect("issue");
-        let obtained_cred =
-            instantiation2::obtain_cred(&pp, &ipar, &message, cred.clone(), &proof).expect("obtain");
+        let obtained_cred = instantiation2::obtain_cred(&pp, &ipar, &message, cred.clone(), &proof)
+            .expect("obtain");
         let show =
             instantiation2::show_cred(&mut rng, &pp, &ipar, &message, &policy, &obtained_cred)
                 .expect("show");
-        let (encdel, dk) =
+        let encdel =
             instantiation2::issue_del(&mut rng, &pp, &isk, &ipar, &message).expect("issue del");
 
         group.bench_with_input(BenchmarkId::new("issue_cred", n), &n, |b, _| {
@@ -165,35 +160,28 @@ fn bench_inst2(c: &mut Criterion) {
 
         for &d in DELEGATION_LEVELS {
             let mut chain = encdel.clone();
-            let mut chain_dk = dk;
-            for _ in 0..d {
-                let (next_chain, next_dk) =
-                    instantiation2::delegate(&mut rng, &pp, &chain, &chain_dk, &message)
-                        .expect("delegate");
+
+            assert!(d > 0, "delegation benchmark depth is its output depth");
+            for _ in 1..d {
+                let next_chain =
+                    instantiation2::delegate(&mut rng, &pp, &chain, &message).expect("delegate");
                 chain = next_chain;
-                chain_dk = next_dk;
             }
 
-            group.bench_with_input(
-                BenchmarkId::new(format!("delegate_d{d}"), n),
-                &n,
-                |b, _| {
-                    b.iter(|| {
-                        let mut rng = ChaCha20Rng::from_seed([24u8; 32]);
-                        instantiation2::delegate(&mut rng, &pp, &chain, &chain_dk, &message)
-                            .expect("delegate")
-                    });
-                },
-            );
+            group.bench_with_input(BenchmarkId::new(format!("delegate_d{d}"), n), &n, |b, _| {
+                b.iter(|| {
+                    let mut rng = ChaCha20Rng::from_seed([24u8; 32]);
+                    instantiation2::delegate(&mut rng, &pp, &chain, &message).expect("delegate")
+                });
+            });
 
+            let chain = instantiation2::delegate(&mut rng, &pp, &chain, &message)
+                .expect("output-depth chain");
             group.bench_with_input(
                 BenchmarkId::new(format!("obtain_del_d{d}"), n),
                 &n,
                 |b, _| {
-                    b.iter(|| {
-                        instantiation2::obtain_del(&pp, &ipar, &chain, &chain_dk)
-                            .expect("obtain del")
-                    });
+                    b.iter(|| instantiation2::obtain_del(&pp, &ipar, &chain).expect("obtain del"));
                 },
             );
         }

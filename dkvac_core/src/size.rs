@@ -1,3 +1,5 @@
+//! Logical protocol payload bytes: include every stored point, scalar, index, message,
+//! and current key; exclude collection lengths, enum tags, and serializer framing.
 use crate::instantiation1;
 use crate::instantiation2;
 use crate::zk::{
@@ -12,47 +14,44 @@ pub const INDEX_BYTES: usize = 8;
 pub const SCALAR_KEY_BYTES: usize = 32;
 
 pub fn inst1_credential_size(cred: &instantiation1::Credential) -> usize {
-    let _ = cred;
     (2 * POINT_BYTES) + inst1_component_map_size(&cred.components)
 }
 
 pub fn inst1_show_size(show: &instantiation1::Show) -> usize {
-    2 * POINT_BYTES
+    2 * POINT_BYTES //+ show.disclosed.len() * SCALAR_BYTES
 }
 
 pub fn inst1_direct_issue_proof_size(proof: &SubsetDirectIssueProof) -> usize {
-    (4 * POINT_BYTES)
-        + inst1_component_map_size(&proof.a_components)
-        + (3 * SCALAR_BYTES)
+    (4 * POINT_BYTES) + inst1_component_map_size(&proof.a_components) + (3 * SCALAR_BYTES)
 }
 
 pub fn inst1_delegatable_issue_proof_size(proof: &SubsetDelegatableIssueProof) -> usize {
-    (5 * POINT_BYTES)
-        + inst1_component_map_size(&proof.a_components)
-        + (4 * SCALAR_BYTES)
+    (5 * POINT_BYTES) + inst1_component_map_size(&proof.a_components) + (4 * SCALAR_BYTES)
 }
 
 pub fn inst1_delegate_proof_size(proof: &SubsetDelegateProof) -> usize {
-    (3 * POINT_BYTES) + inst1_component_map_size(&proof.a_components) + SCALAR_BYTES
+    (3 * POINT_BYTES) + inst1_component_map_size(&proof.a_components) + 2 * SCALAR_BYTES
 }
 
 pub fn inst1_encdel_size(encdel: &instantiation1::EncDel) -> usize {
-    encdel
-        .steps
-        .iter()
-        .map(|step| {
-            (3 * POINT_BYTES)
-                + inst1_component_map_size(&step.ec.components)
-                + match &step.proof {
-                    instantiation1::Inst1DelegationProof::Issue(proof) => {
-                        inst1_delegatable_issue_proof_size(proof)
+    SCALAR_BYTES
+        + encdel
+            .steps
+            .iter()
+            .map(|step| {
+                (3 * POINT_BYTES)
+                    + inst1_component_map_size(&step.ec.components)
+                    + step.attributes.len() * SCALAR_KEY_BYTES
+                    + match &step.proof {
+                        instantiation1::Inst1DelegationProof::Issue(proof) => {
+                            inst1_delegatable_issue_proof_size(proof)
+                        }
+                        instantiation1::Inst1DelegationProof::Delegate(proof) => {
+                            inst1_delegate_proof_size(proof)
+                        }
                     }
-                    instantiation1::Inst1DelegationProof::Delegate(proof) => {
-                        inst1_delegate_proof_size(proof)
-                    }
-                }
-        })
-        .sum()
+            })
+            .sum::<usize>()
 }
 
 pub fn inst1_issue_cred_output_size(
@@ -63,11 +62,11 @@ pub fn inst1_issue_cred_output_size(
 }
 
 pub fn inst1_issue_del_output_size(encdel: &instantiation1::EncDel) -> usize {
-    inst1_encdel_size(encdel) + SCALAR_BYTES
+    inst1_encdel_size(encdel)
 }
 
 pub fn inst1_delegate_output_size(encdel: &instantiation1::EncDel) -> usize {
-    inst1_encdel_size(encdel) + SCALAR_BYTES
+    inst1_encdel_size(encdel)
 }
 
 pub fn inst1_obtain_del_output_size(cred: &instantiation1::Credential) -> usize {
@@ -75,9 +74,10 @@ pub fn inst1_obtain_del_output_size(cred: &instantiation1::Credential) -> usize 
 }
 
 pub fn inst2_credential_size(cred: &instantiation2::Credential) -> usize {
-    (2 * POINT_BYTES) // we are only intersted in tua
-        // + (cred.malleable_keys.len() * (INDEX_BYTES + POINT_BYTES))
-        // + (cred.message.malleable_indices.len() * INDEX_BYTES)
+    2 * POINT_BYTES // we are only interested in tau
+        //+ cred.malleable_keys.len() * (INDEX_BYTES + POINT_BYTES)
+        //+ cred.message.malleable_indices.len() * INDEX_BYTES
+        //+ cred.message.attributes.len() * SCALAR_BYTES
 }
 
 pub fn inst2_show_size(show: &instantiation2::Show) -> usize {
@@ -94,9 +94,7 @@ pub fn inst2_vector_direct_issue_proof_size(proof: &VectorDirectIssueProof) -> u
         + (proof.z_y.len() * (INDEX_BYTES + SCALAR_BYTES))
 }
 
-pub fn inst2_vector_delegatable_issue_proof_size(
-    proof: &VectorDelegatableIssueProof,
-) -> usize {
+pub fn inst2_vector_delegatable_issue_proof_size(proof: &VectorDelegatableIssueProof) -> usize {
     (6 * POINT_BYTES)
         + ((proof.a_malleable_keys.len() + proof.a_y.len()) * (INDEX_BYTES + POINT_BYTES))
         + (5 * SCALAR_BYTES)
@@ -111,28 +109,32 @@ pub fn inst2_vector_presentation_proof_size(proof: &VectorPresentationProof) -> 
         + (proof.z_s.len() * (INDEX_BYTES + SCALAR_BYTES))
 }
 
-pub fn inst2_vector_delegate_proof_size(_proof: &VectorDelegateProof) -> usize {
-    (3 * POINT_BYTES) + SCALAR_BYTES
+pub fn inst2_vector_delegate_proof_size(proof: &VectorDelegateProof) -> usize {
+    (3 * POINT_BYTES)
+        + 2 * SCALAR_BYTES
+        + proof.a_malleable_keys.len() * (INDEX_BYTES + POINT_BYTES)
 }
 
 pub fn inst2_encdel_size(encdel: &instantiation2::EncDel) -> usize {
-    encdel
-        .steps
-        .iter()
-        .map(|step| {
-            (3 * POINT_BYTES)
-                + (step.malleable_keys.len() * (INDEX_BYTES + POINT_BYTES))
-                + (step.message.malleable_indices.len() * INDEX_BYTES)
-                + match &step.proof {
-                    instantiation2::Inst2DelegationProof::Issue(proof) => {
-                        inst2_vector_delegatable_issue_proof_size(proof)
+    SCALAR_BYTES
+        + encdel
+            .steps
+            .iter()
+            .map(|step| {
+                (3 * POINT_BYTES)
+                    + (step.malleable_keys.len() * (INDEX_BYTES + POINT_BYTES))
+                    + (step.message.malleable_indices.len() * INDEX_BYTES)
+                    + step.message.attributes.len() * SCALAR_BYTES
+                    + match &step.proof {
+                        instantiation2::Inst2DelegationProof::Issue(proof) => {
+                            inst2_vector_delegatable_issue_proof_size(proof)
+                        }
+                        instantiation2::Inst2DelegationProof::Delegate(proof) => {
+                            inst2_vector_delegate_proof_size(proof)
+                        }
                     }
-                    instantiation2::Inst2DelegationProof::Delegate(proof) => {
-                        inst2_vector_delegate_proof_size(proof)
-                    }
-                }
-        })
-        .sum()
+            })
+            .sum::<usize>()
 }
 
 pub fn inst2_issue_cred_output_size(
@@ -143,30 +145,30 @@ pub fn inst2_issue_cred_output_size(
 }
 
 pub fn inst2_issue_del_output_size(encdel: &instantiation2::EncDel) -> usize {
-    inst2_encdel_size(encdel) + SCALAR_BYTES
+    inst2_encdel_size(encdel)
 }
 
 pub fn inst2_delegate_output_size(encdel: &instantiation2::EncDel) -> usize {
-    inst2_encdel_size(encdel) + SCALAR_BYTES
+    inst2_encdel_size(encdel)
 }
 
 pub fn inst2_obtain_del_output_size(cred: &instantiation2::Credential) -> usize {
     inst2_credential_size(cred)
 }
 
-fn inst1_component_map_size<T>(map: &std::collections::BTreeMap<instantiation1::ScalarBytes, T>) -> usize {
+fn inst1_component_map_size<T>(
+    map: &std::collections::BTreeMap<instantiation1::ScalarBytes, T>,
+) -> usize {
     map.len() * (SCALAR_KEY_BYTES + POINT_BYTES)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::group::{generator, Scalar};
+    use crate::group::{Scalar, generator};
     use crate::instantiation1;
     use crate::instantiation2;
-    use crate::zk::{
-        VectorDelegatableIssueProof, VectorDirectIssueProof, VectorPresentationProof,
-    };
+    use crate::zk::{VectorDelegatableIssueProof, VectorDirectIssueProof, VectorPresentationProof};
     use rand_chacha::ChaCha20Rng;
     use rand_core::SeedableRng;
     use std::collections::{BTreeMap, BTreeSet};
@@ -183,14 +185,22 @@ mod tests {
     fn inst1_credential_with_4_attributes_has_expected_size() {
         let components = [1u64, 2, 3, 4]
             .into_iter()
-            .map(|n| (instantiation1::ScalarBytes(scalar(n).to_bytes()), point(n + 10)))
+            .map(|n| {
+                (
+                    instantiation1::ScalarBytes(scalar(n).to_bytes()),
+                    point(n + 10),
+                )
+            })
             .collect::<BTreeMap<_, _>>();
         let cred = instantiation1::Credential {
             v_x_g: point(1),
             ev: point(2),
             components,
         };
-        assert_eq!(inst1_credential_size(&cred), 2 * POINT_BYTES + 4 * (SCALAR_KEY_BYTES + POINT_BYTES));
+        assert_eq!(
+            inst1_credential_size(&cred),
+            2 * POINT_BYTES + 4 * (SCALAR_KEY_BYTES + POINT_BYTES)
+        );
     }
 
     #[test]
@@ -200,7 +210,10 @@ mod tests {
             c_prime: point(2),
             disclosed: vec![scalar(1), scalar(2), scalar(3), scalar(4)],
         };
-        assert_eq!(inst1_show_size(&show), (2 * POINT_BYTES) + (4 * SCALAR_BYTES));
+        assert_eq!(
+            inst1_show_size(&show),
+            (2 * POINT_BYTES) + (4 * SCALAR_BYTES)
+        );
     }
 
     #[test]
@@ -221,7 +234,10 @@ mod tests {
         };
         assert_eq!(
             inst2_credential_size(&cred),
-            (2 * POINT_BYTES) + (4 * (INDEX_BYTES + POINT_BYTES)) + (4 * INDEX_BYTES)
+            (2 * POINT_BYTES)
+                + (4 * (INDEX_BYTES + POINT_BYTES))
+                + (4 * INDEX_BYTES)
+                + (4 * SCALAR_BYTES)
         );
     }
 
@@ -310,12 +326,16 @@ mod tests {
         let pp1 = instantiation1::setup(&mut rng1);
         let (isk1, ipar1) = instantiation1::keygen(&mut rng1, &pp1).expect("keygen1");
         let attrs1 = vec![scalar(1), scalar(2), scalar(3), scalar(4)];
-        let (encdel1, dk1) =
+        let encdel1 =
             instantiation1::issue_del(&mut rng1, &pp1, &isk1, &ipar1, &attrs1).expect("issue del1");
         let before1 = inst1_encdel_size(&encdel1);
-        let (encdel1_after, _) =
-            instantiation1::delegate(&mut rng1, &encdel1, &dk1, &[scalar(1), scalar(2), scalar(3)])
-                .expect("delegate1");
+        let encdel1_after = instantiation1::delegate(
+            &mut rng1,
+            &pp1,
+            &encdel1,
+            &[scalar(1), scalar(2), scalar(3)],
+        )
+        .expect("delegate1");
         assert!(inst1_encdel_size(&encdel1_after) > before1);
 
         let mut rng2 = ChaCha20Rng::from_seed([9u8; 32]);
@@ -325,15 +345,15 @@ mod tests {
             attributes: vec![scalar(3), scalar(5), scalar(7), scalar(11)],
             malleable_indices: BTreeSet::from([0usize, 1, 2, 3]),
         };
-        let (encdel2, dk2) =
+        let encdel2 =
             instantiation2::issue_del(&mut rng2, &pp2, &isk2, &ipar2, &msg2).expect("issue del2");
         let before2 = inst2_encdel_size(&encdel2);
         let next2 = instantiation2::Message {
             attributes: msg2.attributes.clone(),
             malleable_indices: BTreeSet::from([0usize, 1, 2]),
         };
-        let (encdel2_after, _) =
-            instantiation2::delegate(&mut rng2, &pp2, &encdel2, &dk2, &next2).expect("delegate2");
+        let encdel2_after =
+            instantiation2::delegate(&mut rng2, &pp2, &encdel2, &next2).expect("delegate2");
         assert!(inst2_encdel_size(&encdel2_after) > before2);
     }
 }
