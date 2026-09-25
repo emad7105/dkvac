@@ -339,7 +339,7 @@ fn vector_obtain_checks_plaintext_not_ciphertext_nonidentity() {
         } else {
             -v * Scalar::from(17u64).invert()
         };
-        let y_powers: BTreeMap<_, _> = (0..4).map(|i| (i, vec::y_power(&isk.y, i))).collect();
+        let y_i: BTreeMap<_, _> = isk.y_i.iter().copied().enumerate().collect();
         let s = VectorDelegatableIssueStatement {
             g,
             h: pp.h,
@@ -351,7 +351,7 @@ fn vector_obtain_checks_plaintext_not_ciphertext_nonidentity() {
             c: vec::compute_mac_scalar(&isk, &msg).unwrap() * v * g,
             attributes: msg.attributes.clone(),
             malleable_indices: msg.malleable_indices.clone(),
-            malleable_keys: y_powers.iter().map(|(i, y)| (*i, v * y * g)).collect(),
+            malleable_keys: y_i.iter().map(|(i, y)| (*i, v * y * g)).collect(),
         };
         let proof = VectorDelegatableIssueProof::prove(
             &mut rng,
@@ -360,7 +360,7 @@ fn vector_obtain_checks_plaintext_not_ciphertext_nonidentity() {
                 r_inv: isk.r.invert(),
                 r: isk.r,
                 x: isk.x,
-                y_powers,
+                y_i,
                 v,
                 z,
             },

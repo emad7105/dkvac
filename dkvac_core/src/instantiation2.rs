@@ -25,7 +25,8 @@ pub struct PublicParams {
 pub struct IssuerSecretKey {
     pub r: Scalar,
     pub x: Scalar,
-    pub y: Scalar,
+    /// Independent coefficient for each vector position (paper y_1, ..., y_t).
+    pub y_i: Vec<Scalar>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -120,13 +121,17 @@ pub fn keygen<R: CryptoRng + RngCore>(
 
     let r = random_scalar(rng);
     let x = random_scalar(rng);
-    let y = random_scalar(rng);
-    let isk = IssuerSecretKey { r, x, y };
+    let y_i = (0..pp.max_attributes)
+        .map(|_| random_scalar(rng))
+        .collect::<Vec<_>>();
+    let isk = IssuerSecretKey { r, x, y_i };
     let ipar = IssuerPublicParams {
         r_h: isk.r * pp.h,
         r_x_g: (isk.r * isk.x) * pp.g,
-        r_y_i_g: (0..pp.max_attributes)
-            .map(|idx| (isk.r * y_power(&isk.y, idx)) * pp.g)
+        r_y_i_g: isk
+            .y_i
+            .iter()
+            .map(|coefficient| (isk.r * *coefficient) * pp.g)
             .collect(),
     };
     Ok((isk, ipar))
@@ -141,11 +146,12 @@ pub fn issue_cred<R: CryptoRng + RngCore>(
 ) -> Result<(Credential, VectorDirectIssueProof), DkvacError> {
     validate_message(pp, message)?;
     validate_issuer_params(pp, ipar)?;
+    validate_issuer_secret_key(pp, isk)?;
 
     let v = random_scalar(rng);
     let v_g = v * pp.g;
     let c = compute_mac_scalar(isk, message)? * v_g;
-    let malleable_keys = compute_malleable_keys(&isk.y, v, pp.g, &message.malleable_indices);
+    let malleable_keys = compute_malleable_keys(&isk.y_i, v, pp.g, &message.malleable_indices);
     let cred = Credential {
         v_g,
         c,
@@ -170,7 +176,7 @@ pub fn issue_cred<R: CryptoRng + RngCore>(
             r_inv: isk.r.invert(),
             r: isk.r,
             x: isk.x,
-            y_powers: compute_y_powers(&isk.y, message.attributes.len()),
+            y_i: coefficient_witness(&isk.y_i),
             v,
         },
     );
@@ -296,6 +302,7 @@ pub fn verify_show(
 ) -> Result<bool, DkvacError> {
     validate_policy(pp, policy)?;
     validate_issuer_params(pp, ipar)?;
+    validate_issuer_secret_key(pp, isk)?;
     if is_identity(&show.v_prime) {
         return Err(DkvacError::IdentityPoint);
     }
@@ -318,7 +325,7 @@ pub fn verify_show(
             if *idx >= pp.max_attributes {
                 return Err(DkvacError::IndexOutOfRange);
             }
-            Ok(acc + y_power(&isk.y, *idx) * *q_i)
+            Ok(acc + isk.y_i[*idx] * *q_i)
         })?;
 
     let disclosed_sum = show
@@ -328,7 +335,7 @@ pub fn verify_show(
             if *idx >= pp.max_attributes {
                 return Err(DkvacError::IndexOutOfRange);
             }
-            Ok(acc + y_power(&isk.y, *idx) * *value * show.v_prime)
+            Ok(acc + isk.y_i[*idx] * *value * show.v_prime)
         })?;
 
     let p = isk.r * (isk.x * show.v_prime + hidden_sum - show.w + disclosed_sum);
@@ -355,12 +362,13 @@ pub fn issue_del<R: CryptoRng + RngCore>(
 ) -> Result<EncDel, DkvacError> {
     validate_message(pp, message)?;
     validate_issuer_params(pp, ipar)?;
+    validate_issuer_secret_key(pp, isk)?;
 
     let v = random_scalar(rng);
     let z = random_scalar(rng);
     let v_g = v * pp.g;
     let c = compute_mac_scalar(isk, message)? * v_g;
-    let malleable_keys = compute_malleable_keys(&isk.y, v, pp.g, &message.malleable_indices);
+    let malleable_keys = compute_malleable_keys(&isk.y_i, v, pp.g, &message.malleable_indices);
     let ev = v_g + z * pp.h;
     let ez = z * pp.g;
     let step = DelegationStep {
@@ -386,7 +394,7 @@ pub fn issue_del<R: CryptoRng + RngCore>(
                 r_inv: isk.r.invert(),
                 r: isk.r,
                 x: isk.x,
-                y_powers: compute_y_powers(&isk.y, message.attributes.len()),
+                y_i: coefficient_witness(&isk.y_i),
                 v,
                 z,
             },
@@ -536,44 +544,43 @@ pub fn is_valid_delegation(current: &Message, next: &Message) -> bool {
     true
 }
 
-pub fn y_power(y: &Scalar, idx: usize) -> Scalar {
-    let mut result = Scalar::ONE;
-    for _ in 0..=idx {
-        result *= y;
-    }
-    result
-}
-
 pub fn compute_mac_scalar(isk: &IssuerSecretKey, message: &Message) -> Result<Scalar, DkvacError> {
-    if message.attributes.is_empty() {
+    if message.attributes.is_empty() || message.attributes.len() != isk.y_i.len() {
         return Err(DkvacError::InvalidAttributeSet);
     }
 
     let mut mac_scalar = isk.x;
     for (idx, attribute) in message.attributes.iter().enumerate() {
-        mac_scalar += y_power(&isk.y, idx) * *attribute;
+        mac_scalar += isk.y_i[idx] * *attribute;
     }
     Ok(mac_scalar)
 }
 
-fn compute_y_powers(y: &Scalar, len: usize) -> BTreeMap<usize, Scalar> {
-    (0..len).map(|idx| (idx, y_power(y, idx))).collect()
+fn coefficient_witness(y_i: &[Scalar]) -> BTreeMap<usize, Scalar> {
+    y_i.iter().copied().enumerate().collect()
 }
 
 fn compute_malleable_keys(
-    y: &Scalar,
+    y_i: &[Scalar],
     v: Scalar,
     g: Point,
     malleable_indices: &BTreeSet<usize>,
 ) -> BTreeMap<usize, Point> {
     malleable_indices
         .iter()
-        .map(|idx| (*idx, (v * y_power(y, *idx)) * g))
+        .map(|idx| (*idx, (v * y_i[*idx]) * g))
         .collect()
 }
 
 fn validate_issuer_params(pp: &PublicParams, ipar: &IssuerPublicParams) -> Result<(), DkvacError> {
     if ipar.r_y_i_g.len() != pp.max_attributes {
+        return Err(DkvacError::InvalidAttributeSet);
+    }
+    Ok(())
+}
+
+fn validate_issuer_secret_key(pp: &PublicParams, isk: &IssuerSecretKey) -> Result<(), DkvacError> {
+    if isk.y_i.len() != pp.max_attributes {
         return Err(DkvacError::InvalidAttributeSet);
     }
     Ok(())
@@ -700,6 +707,72 @@ mod tests {
     }
 
     #[test]
+    fn keygen_samples_independent_coefficients_for_every_position() {
+        let mut rng = base_rng();
+        let pp = setup(&mut rng, 4);
+        let mut expected_rng = rng.clone();
+        let expected_r = random_scalar(&mut expected_rng);
+        let expected_x = random_scalar(&mut expected_rng);
+        let expected_y_i = (0..4)
+            .map(|_| random_scalar(&mut expected_rng))
+            .collect::<Vec<_>>();
+
+        let (isk, ipar) = keygen(&mut rng, &pp).expect("keygen");
+        assert_eq!(isk.r, expected_r);
+        assert_eq!(isk.x, expected_x);
+        assert_eq!(isk.y_i, expected_y_i);
+        assert_eq!(ipar.r_y_i_g.len(), pp.max_attributes);
+        for (idx, coefficient) in isk.y_i.iter().enumerate() {
+            assert_ne!(*coefficient, Scalar::ZERO);
+            assert_eq!(ipar.r_y_i_g[idx], isk.r * *coefficient * pp.g);
+        }
+
+        let decoded: IssuerSecretKey =
+            bincode::deserialize(&bincode::serialize(&isk).expect("serialize key"))
+                .expect("deserialize key");
+        assert_eq!(decoded.y_i, isk.y_i);
+    }
+
+    #[test]
+    fn malformed_coefficient_vector_is_rejected_without_indexing() {
+        let (mut rng, pp, mut isk, ipar) = fixture(4);
+        let message = sample_message();
+        isk.y_i.pop();
+        assert!(matches!(
+            issue_cred(&mut rng, &pp, &isk, &ipar, &message),
+            Err(DkvacError::InvalidAttributeSet)
+        ));
+        assert!(matches!(
+            issue_del(&mut rng, &pp, &isk, &ipar, &message),
+            Err(DkvacError::InvalidAttributeSet)
+        ));
+        assert!(matches!(
+            compute_mac_scalar(&isk, &message),
+            Err(DkvacError::InvalidAttributeSet)
+        ));
+        let policy = DisclosurePolicy {
+            disclosed_indices: BTreeSet::from([0]),
+        };
+        let show = Show {
+            v_prime: pp.g,
+            w: pp.g,
+            q_hidden: BTreeMap::new(),
+            disclosed: BTreeMap::new(),
+            proof: VectorPresentationProof {
+                a_p: pp.g,
+                a_q: BTreeMap::new(),
+                z_mu_prime: Scalar::ZERO,
+                z_beta: BTreeMap::new(),
+                z_s: BTreeMap::new(),
+            },
+        };
+        assert!(matches!(
+            verify_show(&pp, &ipar, &isk, &policy, &show),
+            Err(DkvacError::InvalidAttributeSet)
+        ));
+    }
+
+    #[test]
     fn issue_show_verify_all_indices_accepts() {
         let (mut rng, pp, isk, ipar) = fixture(4);
         let message = sample_message();
@@ -736,7 +809,7 @@ mod tests {
             message.malleable_indices
         );
         for idx in &message.malleable_indices {
-            assert_eq!(cred.malleable_keys[idx], y_power(&isk.y, *idx) * cred.v_g);
+            assert_eq!(cred.malleable_keys[idx], isk.y_i[*idx] * cred.v_g);
         }
     }
 
@@ -756,7 +829,7 @@ mod tests {
         );
         let v_g = first.ec.ev - encdel.dk * pp.h;
         for idx in &message.malleable_indices {
-            assert_eq!(first.malleable_keys[idx], y_power(&isk.y, *idx) * v_g);
+            assert_eq!(first.malleable_keys[idx], isk.y_i[*idx] * v_g);
         }
     }
 

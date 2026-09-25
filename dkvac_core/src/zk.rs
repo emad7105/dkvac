@@ -200,7 +200,7 @@ pub struct VectorDirectIssueWitness {
     pub r_inv: Scalar,
     pub r: Scalar,
     pub x: Scalar,
-    pub y_powers: BTreeMap<usize, Scalar>,
+    pub y_i: BTreeMap<usize, Scalar>,
     pub v: Scalar,
 }
 
@@ -240,7 +240,7 @@ pub struct VectorDelegatableIssueWitness {
     pub r_inv: Scalar,
     pub r: Scalar,
     pub x: Scalar,
-    pub y_powers: BTreeMap<usize, Scalar>,
+    pub y_i: BTreeMap<usize, Scalar>,
     pub v: Scalar,
     pub z: Scalar,
 }
@@ -806,7 +806,7 @@ impl VectorDirectIssueProof {
             &statement.r_y_i_g,
             &statement.malleable_keys,
             &statement.malleable_indices,
-            &witness.y_powers,
+            &witness.y_i,
         ));
 
         let rho_r_inv = random_scalar(rng);
@@ -870,7 +870,7 @@ impl VectorDirectIssueProof {
             z_x: rho_x + challenge * witness.x,
             z_y: rho_y
                 .keys()
-                .map(|idx| (*idx, rho_y[idx] + challenge * witness.y_powers[idx]))
+                .map(|idx| (*idx, rho_y[idx] + challenge * witness.y_i[idx]))
                 .collect(),
             z_v: rho_v + challenge * witness.v,
         }
@@ -946,7 +946,7 @@ impl VectorDelegatableIssueProof {
             &statement.r_y_i_g,
             &statement.malleable_keys,
             &statement.malleable_indices,
-            &witness.y_powers,
+            &witness.y_i,
         ));
 
         let rho_r_inv = random_scalar(rng);
@@ -1014,7 +1014,7 @@ impl VectorDelegatableIssueProof {
             z_x: rho_x + challenge * witness.x,
             z_y: rho_y
                 .keys()
-                .map(|idx| (*idx, rho_y[idx] + challenge * witness.y_powers[idx]))
+                .map(|idx| (*idx, rho_y[idx] + challenge * witness.y_i[idx]))
                 .collect(),
             z_v: rho_v + challenge * witness.v,
             z_z: rho_z + challenge * witness.z,
@@ -1583,12 +1583,12 @@ fn valid_vector_issue_indices<T>(
     r_y_i_g: &[Point],
     malleable_keys: &BTreeMap<usize, Point>,
     malleable_indices: &BTreeSet<usize>,
-    y_powers: &BTreeMap<usize, T>,
+    y_i: &BTreeMap<usize, T>,
 ) -> bool {
     attributes.len() == r_y_i_g.len()
         && malleable_indices.iter().all(|idx| *idx < attributes.len())
         && map_keys_match_set(malleable_keys, malleable_indices)
-        && y_powers.keys().copied().eq(0..attributes.len())
+        && y_i.keys().copied().eq(0..attributes.len())
 }
 
 fn valid_vector_issue_proof_indices<T, U, V>(
@@ -2057,17 +2057,14 @@ mod tests {
         let v = scalar(11);
         let attributes = vec![scalar(2), scalar(4), scalar(6)];
         let malleable_indices = BTreeSet::from([0usize, 2usize]);
-        let all_y_powers = [scalar(7), scalar(13), scalar(19)];
-        let y_powers = all_y_powers
+        let all_y_i = [scalar(7), scalar(13), scalar(19)];
+        let y_i = all_y_i
             .iter()
             .copied()
             .enumerate()
             .collect::<BTreeMap<_, _>>();
         let r_x_g = r * (x * g);
-        let r_y_i_g = all_y_powers
-            .iter()
-            .map(|y_i| r * (*y_i * g))
-            .collect::<Vec<_>>();
+        let r_y_i_g = all_y_i.iter().map(|y_i| r * (*y_i * g)).collect::<Vec<_>>();
         let d = vector_issue_d(r_x_g, &r_y_i_g, &attributes);
         let malleable_keys = malleable_indices
             .iter()
@@ -2091,7 +2088,7 @@ mod tests {
                 r_inv,
                 r,
                 x,
-                y_powers,
+                y_i,
                 v,
             },
         )
@@ -2121,7 +2118,7 @@ mod tests {
                 r_inv: direct_witness.r_inv,
                 r: direct_witness.r,
                 x: direct_witness.x,
-                y_powers: direct_witness.y_powers,
+                y_i: direct_witness.y_i,
                 v: direct_witness.v,
                 z,
             },
@@ -2405,7 +2402,7 @@ mod tests {
             direct.malleable_indices = indices.clone();
             direct.malleable_keys = indices
                 .iter()
-                .map(|i| (*i, w.v * w.y_powers[i] * direct.g))
+                .map(|i| (*i, w.v * w.y_i[i] * direct.g))
                 .collect();
             let p = VectorDirectIssueProof::prove(&mut rng, &direct, &w);
             assert!(p.verify(&direct));
