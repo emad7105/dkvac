@@ -30,7 +30,8 @@ fn bench_inst1(c: &mut Criterion) {
         let pp = instantiation1::setup(&mut rng);
         let (isk, ipar) = instantiation1::keygen(&mut rng, &pp).expect("keygen");
         let attrs = scalar_sequence_1(n);
-        let disclosed = attrs.clone();
+        // Show and verify with the first half disclosed and the second half hidden.
+        let disclosed = attrs[..n / 2].to_vec();
         let (cred, proof) =
             instantiation1::issue_cred(&mut rng, &pp, &isk, &ipar, &attrs).expect("issue");
         let obtained_cred =
@@ -111,7 +112,8 @@ fn bench_inst2(c: &mut Criterion) {
         let (isk, ipar) = instantiation2::keygen(&mut rng, &pp).expect("keygen");
         let message = inst2_message(n);
         let policy = instantiation2::DisclosurePolicy {
-            disclosed_indices: (0..n).collect::<BTreeSet<_>>(),
+            // Match instantiation 1: disclose the first half, hide the rest.
+            disclosed_indices: (0..n / 2).collect::<BTreeSet<_>>(),
         };
         let (cred, proof) =
             instantiation2::issue_cred(&mut rng, &pp, &isk, &ipar, &message).expect("issue");

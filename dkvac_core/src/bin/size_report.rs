@@ -29,7 +29,8 @@ fn main() {
 
     for &n in ATTR_COUNTS {
         let attrs = scalar_sequence_1(n);
-        let disclosed = attrs.clone();
+        // Keep the size experiment's disclosure policy aligned with Criterion.
+        let disclosed = attrs[..n / 2].to_vec();
 
         for &d in DELEGATION_LEVELS {
             let mut rng = ChaCha20Rng::from_seed([n as u8; 32]);
@@ -98,7 +99,8 @@ fn main() {
             malleable_indices: (0..n).collect::<BTreeSet<_>>(),
         };
         let policy = instantiation2::DisclosurePolicy {
-            disclosed_indices: (0..n).collect::<BTreeSet<_>>(),
+            // Disclose the first half of the positions, as in the timing benchmark.
+            disclosed_indices: (0..n / 2).collect::<BTreeSet<_>>(),
         };
 
         for &d in DELEGATION_LEVELS {
