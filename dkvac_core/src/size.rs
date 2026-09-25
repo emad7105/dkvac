@@ -1,5 +1,6 @@
-//! Logical protocol payload bytes: include every stored point, scalar, index, message,
-//! and current key; exclude collection lengths, enum tags, and serializer framing.
+//! Logical sizes of the paper's output objects, excluding separately supplied public
+//! policy data even when the Rust `Show` caches it. Count credential messages and
+//! keys included in the formal output; exclude serializer framing and enum tags.
 use crate::instantiation1;
 use crate::instantiation2;
 use crate::zk::{
@@ -17,8 +18,9 @@ pub fn inst1_credential_size(cred: &instantiation1::Credential) -> usize {
     (2 * POINT_BYTES) + inst1_component_map_size(&cred.components)
 }
 
-pub fn inst1_show_size(show: &instantiation1::Show) -> usize {
-    2 * POINT_BYTES //+ show.disclosed.len() * SCALAR_BYTES
+pub fn inst1_show_size(_show: &instantiation1::Show) -> usize {
+    // The paper defines Show as (V', C'); disclosed values come from the public policy.
+    2 * POINT_BYTES
 }
 
 pub fn inst1_direct_issue_proof_size(proof: &SubsetDirectIssueProof) -> usize {
@@ -74,16 +76,17 @@ pub fn inst1_obtain_del_output_size(cred: &instantiation1::Credential) -> usize 
 }
 
 pub fn inst2_credential_size(cred: &instantiation2::Credential) -> usize {
-    2 * POINT_BYTES // we are only interested in tau
+    // we are only interested in tau
+    (2 * POINT_BYTES)
         //+ cred.malleable_keys.len() * (INDEX_BYTES + POINT_BYTES)
         //+ cred.message.malleable_indices.len() * INDEX_BYTES
         //+ cred.message.attributes.len() * SCALAR_BYTES
 }
 
 pub fn inst2_show_size(show: &instantiation2::Show) -> usize {
+    // Disclosed indices and values are supplied by the public policy, not Show.
     (2 * POINT_BYTES)
         + (show.q_hidden.len() * (INDEX_BYTES + POINT_BYTES))
-        + (show.disclosed.len() * (INDEX_BYTES + SCALAR_BYTES))
         + inst2_vector_presentation_proof_size(&show.proof)
 }
 
@@ -210,10 +213,10 @@ mod tests {
             c_prime: point(2),
             disclosed: vec![scalar(1), scalar(2), scalar(3), scalar(4)],
         };
-        assert_eq!(
-            inst1_show_size(&show),
-            (2 * POINT_BYTES) + (4 * SCALAR_BYTES)
-        );
+        assert_eq!(inst1_show_size(&show), 2 * POINT_BYTES);
+        let mut fewer_disclosed = show.clone();
+        fewer_disclosed.disclosed.truncate(1);
+        assert_eq!(inst1_show_size(&fewer_disclosed), inst1_show_size(&show));
     }
 
     #[test]
@@ -315,9 +318,12 @@ mod tests {
                 z_s: BTreeMap::new(),
             },
         };
-        let expected_show = (2 * POINT_BYTES) + (4 * (INDEX_BYTES + SCALAR_BYTES));
+        let expected_show = 2 * POINT_BYTES;
         let expected_proof = POINT_BYTES + SCALAR_BYTES;
         assert_eq!(inst2_show_size(&show), expected_show + expected_proof);
+        let mut fewer_disclosed = show.clone();
+        fewer_disclosed.disclosed.clear();
+        assert_eq!(inst2_show_size(&fewer_disclosed), inst2_show_size(&show));
     }
 
     #[test]
