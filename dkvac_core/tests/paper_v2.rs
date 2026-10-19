@@ -392,11 +392,23 @@ fn vector_obtain_checks_plaintext_not_ciphertext_nonidentity() {
 }
 
 #[test]
-fn v2_proof_sizes_and_whole_object_key_accounting() {
+fn current_proof_sizes_and_whole_object_key_accounting() {
     let mut rng = rng();
     let pp = sub::setup(&mut rng);
     let (isk, ipar) = sub::keygen(&mut rng, &pp).unwrap();
+    let (_, direct_proof) = sub::issue_cred(&mut rng, &pp, &isk, &ipar, &attributes()).unwrap();
+    assert_eq!(
+        size::inst1_direct_issue_proof_size(&direct_proof),
+        160 + 64 * attributes().len()
+    );
     let root = sub::issue_del(&mut rng, &pp, &isk, &ipar, &attributes()).unwrap();
+    let sub::Inst1DelegationProof::Issue(issue_proof) = &root.steps[0].proof else {
+        panic!()
+    };
+    assert_eq!(
+        size::inst1_delegatable_issue_proof_size(issue_proof),
+        224 + 64 * attributes().len()
+    );
     let chain = sub::delegate(&mut rng, &pp, &root, &attributes()[..2]).unwrap();
     let sub::Inst1DelegationProof::Delegate(proof) = &chain.steps[1].proof else {
         panic!()

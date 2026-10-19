@@ -70,19 +70,16 @@ pub struct SubsetDirectIssueStatement {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SubsetDirectIssueWitness {
-    pub x: Scalar,
     pub y: Scalar,
     pub v: Scalar,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubsetDirectIssueProof {
-    pub a_x: Point,
     pub a_y: Point,
     pub a_ev: Point,
     pub a_v: Point,
     pub a_components: BTreeMap<ScalarBytes, Point>,
-    pub z_x: Scalar,
     pub z_y: Scalar,
     pub z_v: Scalar,
 }
@@ -101,7 +98,6 @@ pub struct SubsetDelegatableIssueStatement {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SubsetDelegatableIssueWitness {
-    pub x: Scalar,
     pub y: Scalar,
     pub v: Scalar,
     pub z: Scalar,
@@ -109,13 +105,11 @@ pub struct SubsetDelegatableIssueWitness {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubsetDelegatableIssueProof {
-    pub a_x: Point,
     pub a_y: Point,
     pub a_ev: Point,
     pub a_ez: Point,
     pub a_e: Point,
     pub a_components: BTreeMap<ScalarBytes, Point>,
-    pub z_x: Scalar,
     pub z_y: Scalar,
     pub z_v: Scalar,
     pub z_z: Scalar,
@@ -393,11 +387,9 @@ impl SubsetDirectIssueProof {
         statement: &SubsetDirectIssueStatement,
         witness: &SubsetDirectIssueWitness,
     ) -> Self {
-        let rho_x = random_scalar(rng);
         let rho_y = random_scalar(rng);
         let rho_v = random_scalar(rng);
 
-        let a_x = rho_x * statement.g;
         let a_y = rho_y * statement.g;
         let a_ev = rho_v * statement.g;
         let a_v = rho_v * statement.x_g;
@@ -407,25 +399,16 @@ impl SubsetDirectIssueProof {
             .map(|(key, c_s)| (*key, rho_y * *c_s))
             .collect::<BTreeMap<_, _>>();
 
-        let mut transcript = Transcript::new(b"dkvac-subset-direct-issue-v2");
+        let mut transcript = Transcript::new(b"dkvac-subset-direct-issue-v3");
         append_subset_direct_issue_statement(&mut transcript, statement);
-        append_subset_direct_issue_commitments(
-            &mut transcript,
-            &a_x,
-            &a_y,
-            &a_ev,
-            &a_v,
-            &a_components,
-        );
+        append_subset_direct_issue_commitments(&mut transcript, &a_y, &a_ev, &a_v, &a_components);
         let c = transcript_challenge_scalar(&mut transcript, b"c");
 
         Self {
-            a_x,
             a_y,
             a_ev,
             a_v,
             a_components,
-            z_x: rho_x + c * witness.x,
             z_y: rho_y + c * witness.y,
             z_v: rho_v + c * witness.v,
         }
@@ -439,11 +422,10 @@ impl SubsetDirectIssueProof {
             return false;
         }
 
-        let mut transcript = Transcript::new(b"dkvac-subset-direct-issue-v2");
+        let mut transcript = Transcript::new(b"dkvac-subset-direct-issue-v3");
         append_subset_direct_issue_statement(&mut transcript, statement);
         append_subset_direct_issue_commitments(
             &mut transcript,
-            &self.a_x,
             &self.a_y,
             &self.a_ev,
             &self.a_v,
@@ -451,9 +433,6 @@ impl SubsetDirectIssueProof {
         );
         let c = transcript_challenge_scalar(&mut transcript, b"c");
 
-        if self.z_x * statement.g != self.a_x + c * statement.x_g {
-            return false;
-        }
         if self.z_y * statement.g != self.a_y + c * statement.y_g {
             return false;
         }
@@ -486,12 +465,10 @@ impl SubsetDelegatableIssueProof {
         statement: &SubsetDelegatableIssueStatement,
         witness: &SubsetDelegatableIssueWitness,
     ) -> Self {
-        let rho_x = random_scalar(rng);
         let rho_y = random_scalar(rng);
         let rho_v = random_scalar(rng);
         let rho_z = random_scalar(rng);
 
-        let a_x = rho_x * statement.g;
         let a_y = rho_y * statement.g;
         let a_ev = rho_v * statement.g;
         let a_ez = rho_z * statement.g;
@@ -502,11 +479,10 @@ impl SubsetDelegatableIssueProof {
             .map(|(key, c_s)| (*key, rho_y * *c_s))
             .collect::<BTreeMap<_, _>>();
 
-        let mut transcript = Transcript::new(b"dkvac-subset-delegatable-issue-v2");
+        let mut transcript = Transcript::new(b"dkvac-subset-delegatable-issue-v3");
         append_subset_delegatable_issue_statement(&mut transcript, statement);
         append_subset_delegatable_issue_commitments(
             &mut transcript,
-            &a_x,
             &a_y,
             &a_ev,
             &a_ez,
@@ -516,13 +492,11 @@ impl SubsetDelegatableIssueProof {
         let c = transcript_challenge_scalar(&mut transcript, b"c");
 
         Self {
-            a_x,
             a_y,
             a_ev,
             a_ez,
             a_e,
             a_components,
-            z_x: rho_x + c * witness.x,
             z_y: rho_y + c * witness.y,
             z_v: rho_v + c * witness.v,
             z_z: rho_z + c * witness.z,
@@ -537,11 +511,10 @@ impl SubsetDelegatableIssueProof {
             return false;
         }
 
-        let mut transcript = Transcript::new(b"dkvac-subset-delegatable-issue-v2");
+        let mut transcript = Transcript::new(b"dkvac-subset-delegatable-issue-v3");
         append_subset_delegatable_issue_statement(&mut transcript, statement);
         append_subset_delegatable_issue_commitments(
             &mut transcript,
-            &self.a_x,
             &self.a_y,
             &self.a_ev,
             &self.a_ez,
@@ -550,9 +523,6 @@ impl SubsetDelegatableIssueProof {
         );
         let c = transcript_challenge_scalar(&mut transcript, b"c");
 
-        if self.z_x * statement.g != self.a_x + c * statement.x_g {
-            return false;
-        }
         if self.z_y * statement.g != self.a_y + c * statement.y_g {
             return false;
         }
@@ -1266,13 +1236,11 @@ fn append_subset_direct_issue_statement(
 
 fn append_subset_direct_issue_commitments(
     transcript: &mut Transcript,
-    a_x: &Point,
     a_y: &Point,
     a_ev: &Point,
     a_v: &Point,
     a_components: &BTreeMap<ScalarBytes, Point>,
 ) {
-    transcript_append_point(transcript, b"a_x", a_x);
     transcript_append_point(transcript, b"a_y", a_y);
     transcript_append_point(transcript, b"a_ev", a_ev);
     transcript_append_point(transcript, b"a_v", a_v);
@@ -1302,14 +1270,12 @@ fn append_subset_delegatable_issue_statement(
 
 fn append_subset_delegatable_issue_commitments(
     transcript: &mut Transcript,
-    a_x: &Point,
     a_y: &Point,
     a_ev: &Point,
     a_ez: &Point,
     a_e: &Point,
     a_components: &BTreeMap<ScalarBytes, Point>,
 ) {
-    transcript_append_point(transcript, b"a_x", a_x);
     transcript_append_point(transcript, b"a_y", a_y);
     transcript_append_point(transcript, b"a_ev", a_ev);
     transcript_append_point(transcript, b"a_ez", a_ez);
@@ -1830,7 +1796,7 @@ mod tests {
                 ev,
                 components,
             },
-            SubsetDirectIssueWitness { x, y, v },
+            SubsetDirectIssueWitness { y, v },
         )
     }
 
@@ -1868,7 +1834,7 @@ mod tests {
                 ez,
                 components,
             },
-            SubsetDelegatableIssueWitness { x, y, v, z },
+            SubsetDelegatableIssueWitness { y, v, z },
         )
     }
 
@@ -1876,6 +1842,16 @@ mod tests {
     fn subset_direct_issue_proof_accepts_valid_statement() {
         let mut rng = ChaCha20Rng::from_seed([9u8; 32]);
         let (statement, witness) = subset_direct_issue_fixture();
+        let proof = SubsetDirectIssueProof::prove(&mut rng, &statement, &witness);
+        assert!(proof.verify(&statement));
+    }
+
+    #[test]
+    fn subset_direct_issue_proof_does_not_require_x_witness() {
+        let mut rng = ChaCha20Rng::from_seed([10u8; 32]);
+        let (mut statement, witness) = subset_direct_issue_fixture();
+        statement.x_g = point(37);
+        statement.v_x_g = witness.v * statement.x_g;
         let proof = SubsetDirectIssueProof::prove(&mut rng, &statement, &witness);
         assert!(proof.verify(&statement));
     }
@@ -1910,6 +1886,16 @@ mod tests {
     fn subset_delegatable_issue_proof_accepts_valid_statement() {
         let mut rng = ChaCha20Rng::from_seed([9u8; 32]);
         let (statement, witness) = subset_delegatable_issue_fixture();
+        let proof = SubsetDelegatableIssueProof::prove(&mut rng, &statement, &witness);
+        assert!(proof.verify(&statement));
+    }
+
+    #[test]
+    fn subset_delegatable_issue_proof_does_not_require_x_witness() {
+        let mut rng = ChaCha20Rng::from_seed([10u8; 32]);
+        let (mut statement, witness) = subset_delegatable_issue_fixture();
+        statement.x_g = point(37);
+        statement.e = witness.v * statement.x_g + witness.z * statement.h;
         let proof = SubsetDelegatableIssueProof::prove(&mut rng, &statement, &witness);
         assert!(proof.verify(&statement));
     }
@@ -2487,47 +2473,24 @@ mod tests {
     }
 
     #[test]
-    fn v2_rejects_legacy_subset_direct_proof_domain() {
+    fn v3_rejects_legacy_subset_direct_proof_domain() {
         let mut rng = ChaCha20Rng::from_seed([48; 32]);
         let (s, w) = subset_direct_issue_fixture();
-        let rx = random_scalar(&mut rng);
         let ry = random_scalar(&mut rng);
         let rv = random_scalar(&mut rng);
         let mut p = SubsetDirectIssueProof {
-            a_x: rx * s.g,
             a_y: ry * s.g,
             a_ev: rv * s.g,
             a_v: rv * s.x_g,
             a_components: s.components.iter().map(|(k, p)| (*k, ry * p)).collect(),
-            z_x: Scalar::ZERO,
             z_y: Scalar::ZERO,
             z_v: Scalar::ZERO,
         };
-        // Exact v1 transcript: no collection lengths, and the old domain.
-        let mut t = Transcript::new(b"dkvac-subset-direct-issue-v1");
-        for (label, point) in [
-            (b"g".as_slice(), s.g),
-            (b"x_g", s.x_g),
-            (b"y_g", s.y_g),
-            (b"v_x_g", s.v_x_g),
-            (b"ev", s.ev),
-        ] {
-            transcript_append_point(&mut t, label, &point);
-        }
-        for (key, point) in &s.components {
-            t.append_message(b"component_key", &key.0);
-            transcript_append_point(&mut t, b"component_value", point);
-        }
-        append_subset_direct_issue_commitments(
-            &mut t,
-            &p.a_x,
-            &p.a_y,
-            &p.a_ev,
-            &p.a_v,
-            &p.a_components,
-        );
+        // The same equations under the previous domain must not verify as v3.
+        let mut t = Transcript::new(b"dkvac-subset-direct-issue-v2");
+        append_subset_direct_issue_statement(&mut t, &s);
+        append_subset_direct_issue_commitments(&mut t, &p.a_y, &p.a_ev, &p.a_v, &p.a_components);
         let c = transcript_challenge_scalar(&mut t, b"c");
-        p.z_x = rx + c * w.x;
         p.z_y = ry + c * w.y;
         p.z_v = rv + c * w.v;
         assert_eq!(p.z_v * s.g, p.a_ev + c * s.ev);

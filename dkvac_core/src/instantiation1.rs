@@ -143,11 +143,7 @@ pub fn issue_cred<R: CryptoRng + RngCore>(
             ev: cred.ev,
             components: cred.components.clone(),
         },
-        &SubsetDirectIssueWitness {
-            x: isk.x,
-            y: isk.y,
-            v,
-        },
+        &SubsetDirectIssueWitness { y: isk.y, v },
     );
     Ok((cred, proof))
 }
@@ -271,12 +267,7 @@ pub fn issue_del<R: CryptoRng + RngCore>(
                 ez,
                 components: proof_components,
             },
-            &SubsetDelegatableIssueWitness {
-                x: isk.x,
-                y: isk.y,
-                v,
-                z,
-            },
+            &SubsetDelegatableIssueWitness { y: isk.y, v, z },
         )),
     };
 

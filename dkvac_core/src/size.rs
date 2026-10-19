@@ -24,11 +24,11 @@ pub fn inst1_show_size(_show: &instantiation1::Show) -> usize {
 }
 
 pub fn inst1_direct_issue_proof_size(proof: &SubsetDirectIssueProof) -> usize {
-    (4 * POINT_BYTES) + inst1_component_map_size(&proof.a_components) + (3 * SCALAR_BYTES)
+    (3 * POINT_BYTES) + inst1_component_map_size(&proof.a_components) + (2 * SCALAR_BYTES)
 }
 
 pub fn inst1_delegatable_issue_proof_size(proof: &SubsetDelegatableIssueProof) -> usize {
-    (5 * POINT_BYTES) + inst1_component_map_size(&proof.a_components) + (4 * SCALAR_BYTES)
+    (4 * POINT_BYTES) + inst1_component_map_size(&proof.a_components) + (3 * SCALAR_BYTES)
 }
 
 pub fn inst1_delegate_proof_size(proof: &SubsetDelegateProof) -> usize {
