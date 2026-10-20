@@ -175,8 +175,6 @@ pub fn issue_cred<R: CryptoRng + RngCore>(
         &VectorDirectIssueWitness {
             r_inv: isk.r.invert(),
             r: isk.r,
-            x: isk.x,
-            y_i: coefficient_witness(&isk.y_i),
             v,
         },
     );
@@ -393,8 +391,6 @@ pub fn issue_del<R: CryptoRng + RngCore>(
             &VectorDelegatableIssueWitness {
                 r_inv: isk.r.invert(),
                 r: isk.r,
-                x: isk.x,
-                y_i: coefficient_witness(&isk.y_i),
                 v,
                 z,
             },
@@ -554,10 +550,6 @@ pub fn compute_mac_scalar(isk: &IssuerSecretKey, message: &Message) -> Result<Sc
         mac_scalar += isk.y_i[idx] * *attribute;
     }
     Ok(mac_scalar)
-}
-
-fn coefficient_witness(y_i: &[Scalar]) -> BTreeMap<usize, Scalar> {
-    y_i.iter().copied().enumerate().collect()
 }
 
 fn compute_malleable_keys(

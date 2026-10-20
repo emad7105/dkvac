@@ -91,17 +91,15 @@ pub fn inst2_show_size(show: &instantiation2::Show) -> usize {
 }
 
 pub fn inst2_vector_direct_issue_proof_size(proof: &VectorDirectIssueProof) -> usize {
-    (5 * POINT_BYTES)
-        + ((proof.a_malleable_keys.len() + proof.a_y.len()) * (INDEX_BYTES + POINT_BYTES))
-        + (4 * SCALAR_BYTES)
-        + (proof.z_y.len() * (INDEX_BYTES + SCALAR_BYTES))
+    (4 * POINT_BYTES)
+        + (proof.a_malleable_keys.len() * (INDEX_BYTES + POINT_BYTES))
+        + (3 * SCALAR_BYTES)
 }
 
 pub fn inst2_vector_delegatable_issue_proof_size(proof: &VectorDelegatableIssueProof) -> usize {
-    (6 * POINT_BYTES)
-        + ((proof.a_malleable_keys.len() + proof.a_y.len()) * (INDEX_BYTES + POINT_BYTES))
-        + (5 * SCALAR_BYTES)
-        + (proof.z_y.len() * (INDEX_BYTES + SCALAR_BYTES))
+    (5 * POINT_BYTES)
+        + (proof.a_malleable_keys.len() * (INDEX_BYTES + POINT_BYTES))
+        + (4 * SCALAR_BYTES)
 }
 
 pub fn inst2_vector_presentation_proof_size(proof: &VectorPresentationProof) -> usize {
@@ -252,21 +250,16 @@ mod tests {
             a_malleable_keys: BTreeMap::from([(1usize, point(3)), (3usize, point(4))]),
             a_r: point(5),
             a_r_inv: point(6),
-            a_x: point(7),
-            a_y: BTreeMap::from([(1usize, point(8)), (3usize, point(9))]),
             z_r_inv: scalar(10),
             z_r: scalar(11),
-            z_x: scalar(12),
-            z_y: BTreeMap::from([(1usize, scalar(13)), (3usize, scalar(14))]),
             z_v: scalar(15),
         };
-        let fixed_points = 5 * POINT_BYTES;
-        let indexed_points = 4 * (INDEX_BYTES + POINT_BYTES);
-        let fixed_scalars = 4 * SCALAR_BYTES;
-        let indexed_scalars = 2 * (INDEX_BYTES + SCALAR_BYTES);
+        let fixed_points = 4 * POINT_BYTES;
+        let indexed_points = 2 * (INDEX_BYTES + POINT_BYTES);
+        let fixed_scalars = 3 * SCALAR_BYTES;
         assert_eq!(
             inst2_vector_direct_issue_proof_size(&proof),
-            fixed_points + indexed_points + fixed_scalars + indexed_scalars
+            fixed_points + indexed_points + fixed_scalars
         );
     }
 
@@ -279,22 +272,17 @@ mod tests {
             a_malleable_keys: BTreeMap::from([(1usize, point(4)), (3usize, point(5))]),
             a_r: point(6),
             a_r_inv: point(7),
-            a_x: point(8),
-            a_y: BTreeMap::from([(1usize, point(9)), (3usize, point(10))]),
             z_r_inv: scalar(11),
             z_r: scalar(12),
-            z_x: scalar(13),
-            z_y: BTreeMap::from([(1usize, scalar(14)), (3usize, scalar(15))]),
             z_v: scalar(16),
             z_z: scalar(17),
         };
-        let fixed_points = 6 * POINT_BYTES;
-        let indexed_points = 4 * (INDEX_BYTES + POINT_BYTES);
-        let fixed_scalars = 5 * SCALAR_BYTES;
-        let indexed_scalars = 2 * (INDEX_BYTES + SCALAR_BYTES);
+        let fixed_points = 5 * POINT_BYTES;
+        let indexed_points = 2 * (INDEX_BYTES + POINT_BYTES);
+        let fixed_scalars = 4 * SCALAR_BYTES;
         assert_eq!(
             inst2_vector_delegatable_issue_proof_size(&proof),
-            fixed_points + indexed_points + fixed_scalars + indexed_scalars
+            fixed_points + indexed_points + fixed_scalars
         );
     }
 

@@ -359,8 +359,6 @@ fn vector_obtain_checks_plaintext_not_ciphertext_nonidentity() {
             &VectorDelegatableIssueWitness {
                 r_inv: isk.r.invert(),
                 r: isk.r,
-                x: isk.x,
-                y_i,
                 v,
                 z,
             },
@@ -437,7 +435,7 @@ fn current_proof_sizes_and_whole_object_key_accounting() {
         let m = msg.malleable_indices.len();
         assert_eq!(
             size::inst2_vector_direct_issue_proof_size(&proof),
-            288 + 40 * m + 80 * 4
+            224 + 40 * m
         );
         let root = vec::issue_del(&mut rng, &pp, &isk, &ipar, &msg).unwrap();
         let vec::Inst2DelegationProof::Issue(proof) = &root.steps[0].proof else {
@@ -445,7 +443,7 @@ fn current_proof_sizes_and_whole_object_key_accounting() {
         };
         assert_eq!(
             size::inst2_vector_delegatable_issue_proof_size(proof),
-            352 + 40 * m + 80 * 4
+            288 + 40 * m
         );
         let chain = vec::delegate(&mut rng, &pp, &root, &msg).unwrap();
         let vec::Inst2DelegationProof::Delegate(proof) = &chain.steps[1].proof else {
