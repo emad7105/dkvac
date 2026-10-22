@@ -35,7 +35,6 @@ pub struct IssuerPublicParams {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Credential {
     pub v_x_g: Point,
-    pub ev: Point,
     pub components: BTreeMap<ScalarBytes, Point>,
 }
 
@@ -128,11 +127,7 @@ pub fn issue_cred<R: CryptoRng + RngCore>(
     let v_g = v * pp.g;
     let v_x_g = v * ipar.x_g;
     let components = compute_components(&attribute_set, isk, &v_g)?;
-    let cred = Credential {
-        v_x_g,
-        ev: v_g,
-        components,
-    };
+    let cred = Credential { v_x_g, components };
     let proof = SubsetDirectIssueProof::prove(
         rng,
         &SubsetDirectIssueStatement {
@@ -140,7 +135,6 @@ pub fn issue_cred<R: CryptoRng + RngCore>(
             x_g: ipar.x_g,
             y_g: ipar.y_g,
             v_x_g: cred.v_x_g,
-            ev: cred.ev,
             components: cred.components.clone(),
         },
         &SubsetDirectIssueWitness { y: isk.y, v },
@@ -159,7 +153,6 @@ pub fn obtain_cred(
         x_g: ipar.x_g,
         y_g: ipar.y_g,
         v_x_g: cred.v_x_g,
-        ev: cred.ev,
         components: cred.components.clone(),
     };
     if !proof.verify(&statement) {
@@ -358,7 +351,6 @@ pub fn obtain_del(
 
     Ok(Credential {
         v_x_g,
-        ev: final_step.ec.ev,
         components: final_step.ec.components.clone(),
     })
 }

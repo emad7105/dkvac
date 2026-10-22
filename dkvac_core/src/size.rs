@@ -1,6 +1,6 @@
-//! Logical sizes of the paper's output objects, excluding separately supplied public
-//! policy data even when the Rust `Show` caches it. Count credential messages and
-//! keys included in the formal output; exclude serializer framing and enum tags.
+//! Cryptographic payload sizes of the paper's output objects. Count compressed
+//! group elements and scalars, but exclude messages/attribute sets, collection
+//! keys and indices, serializer framing, lengths, and enum tags.
 use crate::instantiation1;
 use crate::instantiation2;
 use crate::zk::{
@@ -11,11 +11,9 @@ use crate::zk::{
 
 pub const POINT_BYTES: usize = 32;
 pub const SCALAR_BYTES: usize = 32;
-pub const INDEX_BYTES: usize = 8;
-pub const SCALAR_KEY_BYTES: usize = 32;
 
 pub fn inst1_credential_size(cred: &instantiation1::Credential) -> usize {
-    (2 * POINT_BYTES) + inst1_component_map_size(&cred.components)
+    POINT_BYTES + inst1_component_points_size(&cred.components)
 }
 
 pub fn inst1_show_size(_show: &instantiation1::Show) -> usize {
@@ -24,15 +22,15 @@ pub fn inst1_show_size(_show: &instantiation1::Show) -> usize {
 }
 
 pub fn inst1_direct_issue_proof_size(proof: &SubsetDirectIssueProof) -> usize {
-    (3 * POINT_BYTES) + inst1_component_map_size(&proof.a_components) + (2 * SCALAR_BYTES)
+    (2 * POINT_BYTES) + inst1_component_points_size(&proof.a_components) + (2 * SCALAR_BYTES)
 }
 
 pub fn inst1_delegatable_issue_proof_size(proof: &SubsetDelegatableIssueProof) -> usize {
-    (4 * POINT_BYTES) + inst1_component_map_size(&proof.a_components) + (3 * SCALAR_BYTES)
+    (4 * POINT_BYTES) + inst1_component_points_size(&proof.a_components) + (3 * SCALAR_BYTES)
 }
 
 pub fn inst1_delegate_proof_size(proof: &SubsetDelegateProof) -> usize {
-    (3 * POINT_BYTES) + inst1_component_map_size(&proof.a_components) + 2 * SCALAR_BYTES
+    (3 * POINT_BYTES) + inst1_component_points_size(&proof.a_components) + 2 * SCALAR_BYTES
 }
 
 pub fn inst1_encdel_size(encdel: &instantiation1::EncDel) -> usize {
@@ -42,8 +40,7 @@ pub fn inst1_encdel_size(encdel: &instantiation1::EncDel) -> usize {
             .iter()
             .map(|step| {
                 (3 * POINT_BYTES)
-                    + inst1_component_map_size(&step.ec.components)
-                    + step.attributes.len() * SCALAR_KEY_BYTES
+                    + inst1_component_points_size(&step.ec.components)
                     + match &step.proof {
                         instantiation1::Inst1DelegationProof::Issue(proof) => {
                             inst1_delegatable_issue_proof_size(proof)
@@ -75,45 +72,36 @@ pub fn inst1_obtain_del_output_size(cred: &instantiation1::Credential) -> usize 
     inst1_credential_size(cred)
 }
 
-pub fn inst2_credential_size(cred: &instantiation2::Credential) -> usize {
-    // we are only interested in tau
-    (2 * POINT_BYTES)
-        //+ cred.malleable_keys.len() * (INDEX_BYTES + POINT_BYTES)
-        //+ cred.message.malleable_indices.len() * INDEX_BYTES
-        //+ cred.message.attributes.len() * SCALAR_BYTES
+pub fn inst2_credential_size(_cred: &instantiation2::Credential) -> usize {
+    // The paper credential is tau = (V, C); its message and keys are external.
+    2 * POINT_BYTES
 }
 
 pub fn inst2_show_size(show: &instantiation2::Show) -> usize {
     // Disclosed indices and values are supplied by the public policy, not Show.
     (2 * POINT_BYTES)
-        + (show.q_hidden.len() * (INDEX_BYTES + POINT_BYTES))
+        + (show.q_hidden.len() * POINT_BYTES)
         + inst2_vector_presentation_proof_size(&show.proof)
 }
 
 pub fn inst2_vector_direct_issue_proof_size(proof: &VectorDirectIssueProof) -> usize {
-    (4 * POINT_BYTES)
-        + (proof.a_malleable_keys.len() * (INDEX_BYTES + POINT_BYTES))
-        + (3 * SCALAR_BYTES)
+    (4 * POINT_BYTES) + (proof.a_malleable_keys.len() * POINT_BYTES) + (3 * SCALAR_BYTES)
 }
 
 pub fn inst2_vector_delegatable_issue_proof_size(proof: &VectorDelegatableIssueProof) -> usize {
-    (5 * POINT_BYTES)
-        + (proof.a_malleable_keys.len() * (INDEX_BYTES + POINT_BYTES))
-        + (4 * SCALAR_BYTES)
+    (5 * POINT_BYTES) + (proof.a_malleable_keys.len() * POINT_BYTES) + (4 * SCALAR_BYTES)
 }
 
 pub fn inst2_vector_presentation_proof_size(proof: &VectorPresentationProof) -> usize {
     POINT_BYTES
-        + (proof.a_q.len() * (INDEX_BYTES + POINT_BYTES))
+        + (proof.a_q.len() * POINT_BYTES)
         + SCALAR_BYTES
-        + (proof.z_beta.len() * (INDEX_BYTES + SCALAR_BYTES))
-        + (proof.z_s.len() * (INDEX_BYTES + SCALAR_BYTES))
+        + (proof.z_beta.len() * SCALAR_BYTES)
+        + (proof.z_s.len() * SCALAR_BYTES)
 }
 
 pub fn inst2_vector_delegate_proof_size(proof: &VectorDelegateProof) -> usize {
-    (3 * POINT_BYTES)
-        + 2 * SCALAR_BYTES
-        + proof.a_malleable_keys.len() * (INDEX_BYTES + POINT_BYTES)
+    (3 * POINT_BYTES) + 2 * SCALAR_BYTES + proof.a_malleable_keys.len() * POINT_BYTES
 }
 
 pub fn inst2_encdel_size(encdel: &instantiation2::EncDel) -> usize {
@@ -123,9 +111,7 @@ pub fn inst2_encdel_size(encdel: &instantiation2::EncDel) -> usize {
             .iter()
             .map(|step| {
                 (3 * POINT_BYTES)
-                    + (step.malleable_keys.len() * (INDEX_BYTES + POINT_BYTES))
-                    + (step.message.malleable_indices.len() * INDEX_BYTES)
-                    + step.message.attributes.len() * SCALAR_BYTES
+                    + (step.malleable_keys.len() * POINT_BYTES)
                     + match &step.proof {
                         instantiation2::Inst2DelegationProof::Issue(proof) => {
                             inst2_vector_delegatable_issue_proof_size(proof)
@@ -157,10 +143,10 @@ pub fn inst2_obtain_del_output_size(cred: &instantiation2::Credential) -> usize 
     inst2_credential_size(cred)
 }
 
-fn inst1_component_map_size<T>(
+fn inst1_component_points_size<T>(
     map: &std::collections::BTreeMap<instantiation1::ScalarBytes, T>,
 ) -> usize {
-    map.len() * (SCALAR_KEY_BYTES + POINT_BYTES)
+    map.len() * POINT_BYTES
 }
 
 #[cfg(test)]
@@ -195,13 +181,9 @@ mod tests {
             .collect::<BTreeMap<_, _>>();
         let cred = instantiation1::Credential {
             v_x_g: point(1),
-            ev: point(2),
             components,
         };
-        assert_eq!(
-            inst1_credential_size(&cred),
-            2 * POINT_BYTES + 4 * (SCALAR_KEY_BYTES + POINT_BYTES)
-        );
+        assert_eq!(inst1_credential_size(&cred), POINT_BYTES + 4 * POINT_BYTES);
     }
 
     #[test]
@@ -233,13 +215,7 @@ mod tests {
                 malleable_indices: BTreeSet::from([0usize, 1, 2, 3]),
             },
         };
-        assert_eq!(
-            inst2_credential_size(&cred),
-            (2 * POINT_BYTES)
-                + (4 * (INDEX_BYTES + POINT_BYTES))
-                + (4 * INDEX_BYTES)
-                + (4 * SCALAR_BYTES)
-        );
+        assert_eq!(inst2_credential_size(&cred), 2 * POINT_BYTES);
     }
 
     #[test]
@@ -255,7 +231,7 @@ mod tests {
             z_v: scalar(15),
         };
         let fixed_points = 4 * POINT_BYTES;
-        let indexed_points = 2 * (INDEX_BYTES + POINT_BYTES);
+        let indexed_points = 2 * POINT_BYTES;
         let fixed_scalars = 3 * SCALAR_BYTES;
         assert_eq!(
             inst2_vector_direct_issue_proof_size(&proof),
@@ -278,7 +254,7 @@ mod tests {
             z_z: scalar(17),
         };
         let fixed_points = 5 * POINT_BYTES;
-        let indexed_points = 2 * (INDEX_BYTES + POINT_BYTES);
+        let indexed_points = 2 * POINT_BYTES;
         let fixed_scalars = 4 * SCALAR_BYTES;
         assert_eq!(
             inst2_vector_delegatable_issue_proof_size(&proof),

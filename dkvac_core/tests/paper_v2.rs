@@ -390,14 +390,14 @@ fn vector_obtain_checks_plaintext_not_ciphertext_nonidentity() {
 }
 
 #[test]
-fn current_proof_sizes_and_whole_object_key_accounting() {
+fn current_proof_sizes_and_cryptographic_payload_accounting() {
     let mut rng = rng();
     let pp = sub::setup(&mut rng);
     let (isk, ipar) = sub::keygen(&mut rng, &pp).unwrap();
     let (_, direct_proof) = sub::issue_cred(&mut rng, &pp, &isk, &ipar, &attributes()).unwrap();
     assert_eq!(
         size::inst1_direct_issue_proof_size(&direct_proof),
-        160 + 64 * attributes().len()
+        128 + 32 * attributes().len()
     );
     let root = sub::issue_del(&mut rng, &pp, &isk, &ipar, &attributes()).unwrap();
     let sub::Inst1DelegationProof::Issue(issue_proof) = &root.steps[0].proof else {
@@ -405,16 +405,16 @@ fn current_proof_sizes_and_whole_object_key_accounting() {
     };
     assert_eq!(
         size::inst1_delegatable_issue_proof_size(issue_proof),
-        224 + 64 * attributes().len()
+        224 + 32 * attributes().len()
     );
     let chain = sub::delegate(&mut rng, &pp, &root, &attributes()[..2]).unwrap();
     let sub::Inst1DelegationProof::Delegate(proof) = &chain.steps[1].proof else {
         panic!()
     };
-    assert_eq!(size::inst1_delegate_proof_size(proof), 160 + 64 * 2);
+    assert_eq!(size::inst1_delegate_proof_size(proof), 160 + 32 * 2);
     assert_eq!(
         size::inst1_encdel_size(&chain),
-        size::inst1_encdel_size(&root) + 96 + 96 * 2 + 160 + 64 * 2
+        size::inst1_encdel_size(&root) + 96 + 32 * 2 + 160 + 32 * 2
     );
     assert_eq!(
         size::inst1_delegate_output_size(&chain),
@@ -435,7 +435,7 @@ fn current_proof_sizes_and_whole_object_key_accounting() {
         let m = msg.malleable_indices.len();
         assert_eq!(
             size::inst2_vector_direct_issue_proof_size(&proof),
-            224 + 40 * m
+            224 + 32 * m
         );
         let root = vec::issue_del(&mut rng, &pp, &isk, &ipar, &msg).unwrap();
         let vec::Inst2DelegationProof::Issue(proof) = &root.steps[0].proof else {
@@ -443,16 +443,16 @@ fn current_proof_sizes_and_whole_object_key_accounting() {
         };
         assert_eq!(
             size::inst2_vector_delegatable_issue_proof_size(proof),
-            288 + 40 * m
+            288 + 32 * m
         );
         let chain = vec::delegate(&mut rng, &pp, &root, &msg).unwrap();
         let vec::Inst2DelegationProof::Delegate(proof) = &chain.steps[1].proof else {
             panic!()
         };
-        assert_eq!(size::inst2_vector_delegate_proof_size(proof), 160 + 40 * m);
+        assert_eq!(size::inst2_vector_delegate_proof_size(proof), 160 + 32 * m);
         assert_eq!(
             size::inst2_encdel_size(&chain),
-            size::inst2_encdel_size(&root) + 96 + 48 * m + 32 * 4 + 160 + 40 * m
+            size::inst2_encdel_size(&root) + 96 + 32 * m + 160 + 32 * m
         );
         assert_eq!(
             size::inst2_delegate_output_size(&chain),

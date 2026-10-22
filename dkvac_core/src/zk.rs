@@ -64,7 +64,6 @@ pub struct SubsetDirectIssueStatement {
     pub x_g: Point,
     pub y_g: Point,
     pub v_x_g: Point,
-    pub ev: Point,
     pub components: BTreeMap<ScalarBytes, Point>,
 }
 
@@ -77,7 +76,6 @@ pub struct SubsetDirectIssueWitness {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubsetDirectIssueProof {
     pub a_y: Point,
-    pub a_ev: Point,
     pub a_v: Point,
     pub a_components: BTreeMap<ScalarBytes, Point>,
     pub z_y: Scalar,
@@ -379,22 +377,21 @@ impl SubsetDirectIssueProof {
         let rho_v = random_scalar(rng);
 
         let a_y = rho_y * statement.g;
-        let a_ev = rho_v * statement.g;
+        let rho_v_g = rho_v * statement.g;
         let a_v = rho_v * statement.x_g;
         let a_components = statement
             .components
             .iter()
-            .map(|(key, c_s)| (*key, rho_y * *c_s))
+            .map(|(key, c_s)| (*key, rho_y * *c_s - rho_v_g))
             .collect::<BTreeMap<_, _>>();
 
-        let mut transcript = Transcript::new(b"dkvac-subset-direct-issue-v3");
+        let mut transcript = Transcript::new(b"dkvac-subset-direct-issue-v4");
         append_subset_direct_issue_statement(&mut transcript, statement);
-        append_subset_direct_issue_commitments(&mut transcript, &a_y, &a_ev, &a_v, &a_components);
+        append_subset_direct_issue_commitments(&mut transcript, &a_y, &a_v, &a_components);
         let c = transcript_challenge_scalar(&mut transcript, b"c");
 
         Self {
             a_y,
-            a_ev,
             a_v,
             a_components,
             z_y: rho_y + c * witness.y,
@@ -410,12 +407,11 @@ impl SubsetDirectIssueProof {
             return false;
         }
 
-        let mut transcript = Transcript::new(b"dkvac-subset-direct-issue-v3");
+        let mut transcript = Transcript::new(b"dkvac-subset-direct-issue-v4");
         append_subset_direct_issue_statement(&mut transcript, statement);
         append_subset_direct_issue_commitments(
             &mut transcript,
             &self.a_y,
-            &self.a_ev,
             &self.a_v,
             &self.a_components,
         );
@@ -424,13 +420,11 @@ impl SubsetDirectIssueProof {
         if self.z_y * statement.g != self.a_y + c * statement.y_g {
             return false;
         }
-        if self.z_v * statement.g != self.a_ev + c * statement.ev {
-            return false;
-        }
         if self.z_v * statement.x_g != self.a_v + c * statement.v_x_g {
             return false;
         }
 
+        let z_v_g = self.z_v * statement.g;
         for (key, c_s) in &statement.components {
             let Some(a_c_s) = self.a_components.get(key) else {
                 return false;
@@ -438,7 +432,7 @@ impl SubsetDirectIssueProof {
             let Ok(s) = scalar_from_key(key) else {
                 return false;
             };
-            if self.z_y * *c_s != *a_c_s + c * (statement.ev - s * *c_s) {
+            if self.z_y * *c_s - z_v_g != *a_c_s - c * s * *c_s {
                 return false;
             }
         }
@@ -1142,7 +1136,6 @@ fn append_subset_direct_issue_statement(
     transcript_append_point(transcript, b"x_g", &statement.x_g);
     transcript_append_point(transcript, b"y_g", &statement.y_g);
     transcript_append_point(transcript, b"v_x_g", &statement.v_x_g);
-    transcript_append_point(transcript, b"ev", &statement.ev);
     transcript_append_usize(transcript, b"components_len", statement.components.len());
     for (key, point) in &statement.components {
         transcript.append_message(b"component_key", &key.0);
@@ -1153,12 +1146,10 @@ fn append_subset_direct_issue_statement(
 fn append_subset_direct_issue_commitments(
     transcript: &mut Transcript,
     a_y: &Point,
-    a_ev: &Point,
     a_v: &Point,
     a_components: &BTreeMap<ScalarBytes, Point>,
 ) {
     transcript_append_point(transcript, b"a_y", a_y);
-    transcript_append_point(transcript, b"a_ev", a_ev);
     transcript_append_point(transcript, b"a_v", a_v);
     for (key, point) in a_components {
         transcript.append_message(b"a_component_key", &key.0);
@@ -1674,7 +1665,6 @@ mod tests {
                 x_g,
                 y_g,
                 v_x_g,
-                ev,
                 components,
             },
             SubsetDirectIssueWitness { y, v },
@@ -2078,7 +2068,6 @@ mod tests {
         let (mut s, mut w) = subset_direct_issue_fixture();
         w.v = Scalar::ZERO;
         s.v_x_g = Point::default();
-        s.ev = Point::default();
         s.components
             .values_mut()
             .for_each(|p| *p = Point::default());
@@ -2405,27 +2394,29 @@ mod tests {
     }
 
     #[test]
-    fn v3_rejects_legacy_subset_direct_proof_domain() {
+    fn v4_rejects_legacy_subset_direct_proof_domain() {
         let mut rng = ChaCha20Rng::from_seed([48; 32]);
         let (s, w) = subset_direct_issue_fixture();
         let ry = random_scalar(&mut rng);
         let rv = random_scalar(&mut rng);
         let mut p = SubsetDirectIssueProof {
             a_y: ry * s.g,
-            a_ev: rv * s.g,
             a_v: rv * s.x_g,
-            a_components: s.components.iter().map(|(k, p)| (*k, ry * p)).collect(),
+            a_components: s
+                .components
+                .iter()
+                .map(|(k, p)| (*k, ry * p - rv * s.g))
+                .collect(),
             z_y: Scalar::ZERO,
             z_v: Scalar::ZERO,
         };
-        // The same equations under the previous domain must not verify as v3.
-        let mut t = Transcript::new(b"dkvac-subset-direct-issue-v2");
+        // The same equations under the previous domain must not verify as v4.
+        let mut t = Transcript::new(b"dkvac-subset-direct-issue-v3");
         append_subset_direct_issue_statement(&mut t, &s);
-        append_subset_direct_issue_commitments(&mut t, &p.a_y, &p.a_ev, &p.a_v, &p.a_components);
+        append_subset_direct_issue_commitments(&mut t, &p.a_y, &p.a_v, &p.a_components);
         let c = transcript_challenge_scalar(&mut t, b"c");
         p.z_y = ry + c * w.y;
         p.z_v = rv + c * w.v;
-        assert_eq!(p.z_v * s.g, p.a_ev + c * s.ev);
         assert!(!p.verify(&s));
     }
 }
